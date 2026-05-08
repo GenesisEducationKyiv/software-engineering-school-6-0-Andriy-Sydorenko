@@ -60,13 +60,15 @@ func run() error {
 		}
 	}
 
-	note := notifier.New(&notifier.Config{
-		Host:     cfg.SMTPHost,
-		Port:     cfg.SMTPPort,
-		Username: cfg.SMTPUserName,
-		Password: cfg.SMTPPassword,
-		BaseURL:  cfg.BaseURL,
-	})
+	note := notifier.New(
+		&notifier.Config{
+			Host:     cfg.SMTPHost,
+			Port:     cfg.SMTPPort,
+			Username: cfg.SMTPUserName,
+			Password: cfg.SMTPPassword,
+			BaseURL:  cfg.BaseURL,
+		},
+	)
 	svc := service.New(repo, gh, note)
 	scan := scanner.New(repo, fetcher, note, cfg.ScanInterval)
 

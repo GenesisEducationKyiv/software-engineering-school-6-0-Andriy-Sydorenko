@@ -5,41 +5,30 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
+
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/cache"
+	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/db"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/github"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner"
 )
 
 const envFile = ".env"
 
 type Config struct {
-	DatabaseURL string
-	DBHost      string
-	DBPort      string
-	DBUser      string
-	DBPassword  string
-	DBName      string
-	DBSSLMode   string
+	DB      database.Config
+	Redis   cache.Config
+	SMTP    notifier.Config
+	Scanner scanner.Config
+	GitHub  github.Config
 
-	RedisURL      string
-	RedisHost     string
-	RedisPort     string
-	RedisPassword string
-	RedisDB       string
-
-	Port string
-
-	GitHubToken string
-
-	SMTPHost     string
-	SMTPPort     string
-	SMTPUserName string
-	SMTPPassword string
-
-	ScanInterval time.Duration
-	BaseURL      string
-
-	APIKey string
+	Port           string
+	APIKey         string
+	ScannerEnabled bool
 }
 
 func LoadConfig() (*Config, error) {
@@ -49,56 +38,66 @@ func LoadConfig() (*Config, error) {
 	}
 
 	cfg := &Config{
-		DatabaseURL:   os.Getenv("DATABASE_URL"),
-		DBHost:        getEnvOrDefault("DB_HOST", "localhost"),
-		DBPort:        getEnvOrDefault("DB_PORT", "5432"),
-		DBUser:        os.Getenv("DB_USER"),
-		DBPassword:    os.Getenv("DB_PASSWORD"),
-		DBName:        os.Getenv("DB_NAME"),
-		DBSSLMode:     getEnvOrDefault("DB_SSLMODE", "disable"),
-		RedisURL:      os.Getenv("REDIS_URL"),
-		RedisHost:     getEnvOrDefault("REDIS_HOST", "localhost"),
-		RedisPort:     getEnvOrDefault("REDIS_PORT", "6379"),
-		RedisPassword: os.Getenv("REDIS_PASSWORD"),
-		RedisDB:       getEnvOrDefault("REDIS_DB", "0"),
-		Port:          getEnvOrDefault("PORT", "8080"),
-		GitHubToken:   os.Getenv("GITHUB_TOKEN"),
-		SMTPHost:      os.Getenv("SMTP_HOST"),
-		SMTPPort:      getEnvOrDefault("SMTP_PORT", "587"),
-		SMTPUserName:  os.Getenv("SMTP_USERNAME"),
-		SMTPPassword:  os.Getenv("SMTP_PASSWORD"),
-		BaseURL:       getEnvOrDefault("BASE_URL", "http://localhost:8080"),
-		APIKey:        os.Getenv("API_KEY"),
+		DB: database.Config{
+			URL:      os.Getenv("DATABASE_URL"),
+			Host:     getEnvOrDefault("DB_HOST", "localhost"),
+			Port:     getEnvOrDefault("DB_PORT", "5432"),
+			User:     os.Getenv("DB_USER"),
+			Password: os.Getenv("DB_PASSWORD"),
+			Name:     os.Getenv("DB_NAME"),
+			SSLMode:  getEnvOrDefault("DB_SSLMODE", "disable"),
+		},
+		Redis: cache.Config{
+			URL:      os.Getenv("REDIS_URL"),
+			Host:     os.Getenv("REDIS_HOST"),
+			Port:     getEnvOrDefault("REDIS_PORT", "6379"),
+			Password: os.Getenv("REDIS_PASSWORD"),
+			DB:       getEnvOrDefault("REDIS_DB", "0"),
+		},
+		SMTP: notifier.Config{
+			Host:     os.Getenv("SMTP_HOST"),
+			Port:     getEnvOrDefault("SMTP_PORT", "587"),
+			Username: os.Getenv("SMTP_USERNAME"),
+			Password: os.Getenv("SMTP_PASSWORD"),
+			BaseURL:  getEnvOrDefault("BASE_URL", "http://localhost:8080"),
+		},
+		Scanner: loadScannerConfig(),
+		GitHub: github.Config{
+			Token:   os.Getenv("GITHUB_TOKEN"),
+			Timeout: getEnvDuration("GITHUB_TIMEOUT", 10*time.Second),
+		},
+		Port:           getEnvOrDefault("PORT", "8080"),
+		APIKey:         os.Getenv("API_KEY"),
+		ScannerEnabled: getEnvBool("SCANNER_ENABLED", true),
 	}
 
-	intervalStr := getEnvOrDefault("SCAN_INTERVAL", "5m")
-	interval, err := time.ParseDuration(intervalStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid SCAN_INTERVAL %q: %w", intervalStr, err)
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
-	cfg.ScanInterval = interval
-
-	if cfg.DatabaseURL == "" {
-		if cfg.DBUser == "" || cfg.DBName == "" {
-			return nil, fmt.Errorf("either DATABASE_URL or DB_USER+DB_NAME (with DB_HOST/DB_PORT/DB_PASSWORD) must be set")
-		}
-	}
-
-	if cfg.SMTPHost == "" || cfg.SMTPUserName == "" || cfg.SMTPPassword == "" {
-		return nil, fmt.Errorf("SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD are required")
-	}
-
 	return cfg, nil
 }
 
-func (c *Config) PostgresDSN() string {
-	if c.DatabaseURL != "" {
-		return c.DatabaseURL
+// loadScannerConfig panics on malformed env: config is a system
+// boundary and an operator typo must not silently flip behavior.
+func loadScannerConfig() scanner.Config {
+	concurrency := getEnvInt("SCAN_CONCURRENCY", 8)
+	if concurrency < 1 {
+		panic(fmt.Sprintf("config: SCAN_CONCURRENCY must be >= 1, got %d", concurrency))
 	}
-	return fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		c.DBHost, c.DBPort, c.DBUser, c.DBPassword, c.DBName, c.DBSSLMode,
-	)
+	return scanner.Config{
+		Interval:    getEnvDuration("SCAN_INTERVAL", 5*time.Minute),
+		Concurrency: concurrency,
+	}
+}
+
+func (c *Config) validate() error {
+	if c.DB.URL == "" && (c.DB.User == "" || c.DB.Name == "") {
+		return fmt.Errorf("either DATABASE_URL or DB_USER+DB_NAME (with DB_HOST/DB_PORT/DB_PASSWORD) must be set")
+	}
+	if c.SMTP.Host == "" || c.SMTP.Username == "" || c.SMTP.Password == "" {
+		return fmt.Errorf("SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD are required")
+	}
+	return nil
 }
 
 func getEnvOrDefault(key, fallback string) string {
@@ -106,4 +105,47 @@ func getEnvOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// getEnvDuration parses a duration env var, falling back when unset.
+// A malformed value panics: the operator set something on purpose and
+// got the format wrong; silently using the default would hide the bug.
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		panic(fmt.Sprintf("config: invalid %s %q: %v", key, v, err))
+	}
+	return d
+}
+
+// getEnvInt parses an int env var, falling back when unset. Malformed
+// values panic — see getEnvDuration for the rationale.
+func getEnvInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		panic(fmt.Sprintf("config: invalid %s %q: %v", key, v, err))
+	}
+	return n
+}
+
+// getEnvBool parses a bool env var, falling back when unset. Malformed
+// values panic — see getEnvDuration for the rationale.
+func getEnvBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		panic(fmt.Sprintf("config: invalid %s %q: %v", key, v, err))
+	}
+	return b
 }

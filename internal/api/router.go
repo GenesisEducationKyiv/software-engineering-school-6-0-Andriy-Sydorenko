@@ -8,11 +8,11 @@ import (
 
 func NewRouter(h *Handler, apiKey string) *gin.Engine {
 	router := gin.Default()
-	RegisterRoutes(router, h, apiKey)
+	registerRoutes(router, h, apiKey)
 	return router
 }
 
-func RegisterRoutes(router *gin.Engine, h *Handler, apiKey string) {
+func registerRoutes(router *gin.Engine, h *Handler, apiKey string) {
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})

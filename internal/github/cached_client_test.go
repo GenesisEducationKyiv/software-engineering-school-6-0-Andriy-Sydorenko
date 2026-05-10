@@ -39,13 +39,17 @@ func (f *fakeStore) SetEx(_ context.Context, key, value string, _ time.Duration)
 
 func TestCachedValidateRepoCachesOK(t *testing.T) {
 	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		w.WriteHeader(http.StatusOK)
-	}))
+	srv := httptest.NewServer(
+		http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.WriteHeader(http.StatusOK)
+			},
+		),
+	)
 	defer srv.Close()
 
-	inner := NewClient("")
+	inner := NewClient(&Config{Timeout: 10 * time.Second})
 	inner.httpClient = srv.Client()
 	inner.httpClient.Transport = &hostRewrite{target: srv.URL}
 	c := NewCachedClient(inner, newFakeStore())
@@ -62,13 +66,17 @@ func TestCachedValidateRepoCachesOK(t *testing.T) {
 
 func TestCachedValidateRepoCachesNotFound(t *testing.T) {
 	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		w.WriteHeader(http.StatusNotFound)
-	}))
+	srv := httptest.NewServer(
+		http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.WriteHeader(http.StatusNotFound)
+			},
+		),
+	)
 	defer srv.Close()
 
-	inner := NewClient("")
+	inner := NewClient(&Config{Timeout: 10 * time.Second})
 	inner.httpClient = srv.Client()
 	inner.httpClient.Transport = &hostRewrite{target: srv.URL}
 	c := NewCachedClient(inner, newFakeStore())
@@ -86,13 +94,17 @@ func TestCachedValidateRepoCachesNotFound(t *testing.T) {
 
 func TestCachedGetLatestReleaseCachesTag(t *testing.T) {
 	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		_, _ = w.Write([]byte(`{"tag_name":"v1.2.3"}`))
-	}))
+	srv := httptest.NewServer(
+		http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				_, _ = w.Write([]byte(`{"tag_name":"v1.2.3"}`))
+			},
+		),
+	)
 	defer srv.Close()
 
-	inner := NewClient("")
+	inner := NewClient(&Config{Timeout: 10 * time.Second})
 	inner.httpClient = srv.Client()
 	inner.httpClient.Transport = &hostRewrite{target: srv.URL}
 	c := NewCachedClient(inner, newFakeStore())
@@ -110,13 +122,17 @@ func TestCachedGetLatestReleaseCachesTag(t *testing.T) {
 
 func TestCachedRateLimitNotCached(t *testing.T) {
 	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
+	srv := httptest.NewServer(
+		http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.WriteHeader(http.StatusTooManyRequests)
+			},
+		),
+	)
 	defer srv.Close()
 
-	inner := NewClient("")
+	inner := NewClient(&Config{Timeout: 10 * time.Second})
 	inner.httpClient = srv.Client()
 	inner.httpClient.Transport = &hostRewrite{target: srv.URL}
 	c := NewCachedClient(inner, newFakeStore())

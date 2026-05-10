@@ -9,8 +9,30 @@ import (
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
 )
 
-func NewPostgres(dsn string) (*gorm.DB, error) {
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+// Config bundles Postgres connection knobs. URL wins when set.
+type Config struct {
+	URL      string
+	Host     string
+	Port     string
+	User     string
+	Password string
+	Name     string
+	SSLMode  string
+}
+
+// DSN returns a libpq connection string.
+func (c *Config) DSN() string {
+	if c.URL != "" {
+		return c.URL
+	}
+	return fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		c.Host, c.Port, c.User, c.Password, c.Name, c.SSLMode,
+	)
+}
+
+func NewPostgres(cfg *Config) (*gorm.DB, error) {
+	db, err := gorm.Open(postgres.Open(cfg.DSN()), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("connect postgres: %w", err)
 	}

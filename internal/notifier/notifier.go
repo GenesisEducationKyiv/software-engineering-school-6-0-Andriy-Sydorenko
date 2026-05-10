@@ -1,6 +1,7 @@
 package notifier
 
 import (
+	"context"
 	"fmt"
 	"net/smtp"
 	"strings"
@@ -32,7 +33,10 @@ func New(cfg *Config) *Notifier {
 	return &Notifier{cfg: *cfg}
 }
 
-func (n *Notifier) SendConfirmation(email, repo, token, unsubscribeToken string) error {
+func (n *Notifier) SendConfirmation(ctx context.Context, email, repo, token, unsubscribeToken string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	subject := fmt.Sprintf("Confirm your subscription to %s releases", repo)
 	confirmURL := fmt.Sprintf("%s/api/confirm/%s", n.cfg.BaseURL, token)
 	unsubscribeURL := fmt.Sprintf("%s/api/unsubscribe/%s", n.cfg.BaseURL, unsubscribeToken)
@@ -59,7 +63,10 @@ func (n *Notifier) SendConfirmation(email, repo, token, unsubscribeToken string)
 	return n.send(email, subject, plain, html, unsubscribeURL)
 }
 
-func (n *Notifier) SendReleaseNotification(email, repo, tag, unsubscribeToken string) error {
+func (n *Notifier) SendReleaseNotification(ctx context.Context, email, repo, tag, unsubscribeToken string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	subject := fmt.Sprintf("New release %s for %s", tag, repo)
 	releaseURL := fmt.Sprintf("https://github.com/%s/releases/tag/%s", repo, tag)
 	unsubscribeURL := fmt.Sprintf("%s/api/unsubscribe/%s", n.cfg.BaseURL, unsubscribeToken)

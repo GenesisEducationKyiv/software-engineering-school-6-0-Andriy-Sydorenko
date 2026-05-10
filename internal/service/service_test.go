@@ -8,20 +8,14 @@ import (
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
 )
 
+// mockRepo only exposes the dial-knobs the current test suite actually
+// uses. Error-injection fields can be added back at the point a test
+// needs them — speculative knobs were pruned to keep the mock honest.
 type mockRepo struct {
-	findExisting        *domain.Subscription
-	findExistingErr     error
-	findByEmail         []domain.Subscription
-	findByEmailErr      error
-	findByUnsubToken    *domain.Subscription
-	findByUnsubTokenErr error
-	createErr           error
-	createTokenErr      error
-	findToken           *domain.ConfirmationToken
-	findTokenErr        error
-	confirmErr          error
-	deleteSubErr        error
-	deleteTokenErr      error
+	findExisting     *domain.Subscription
+	findByEmail      []domain.Subscription
+	findByUnsubToken *domain.Subscription
+	findToken        *domain.ConfirmationToken
 
 	createdSub     *domain.Subscription
 	createdToken   *domain.ConfirmationToken
@@ -30,48 +24,56 @@ type mockRepo struct {
 	deletedTokenID uint
 }
 
-func (m *mockRepo) CreateSubscription(_ context.Context, sub *domain.Subscription) error {
+func (m *mockRepo) CreateSubscriptionWithToken(_ context.Context, sub *domain.Subscription, token *domain.ConfirmationToken) error {
 	m.createdSub = sub
-	if m.createErr == nil {
-		sub.ID = 1
-	}
-	return m.createErr
+	m.createdToken = token
+	sub.ID = 1
+	token.SubscriptionID = sub.ID
+	return nil
 }
 
 func (m *mockRepo) FindSubscriptionByEmailAndRepo(_ context.Context, _, _ string) (*domain.Subscription, error) {
-	return m.findExisting, m.findExistingErr
+	return m.findExisting, nil
 }
 
 func (m *mockRepo) FindSubscriptionsByEmail(_ context.Context, _ string) ([]domain.Subscription, error) {
-	return m.findByEmail, m.findByEmailErr
+	return m.findByEmail, nil
 }
 
 func (m *mockRepo) FindSubscriptionByUnsubscribeToken(_ context.Context, _ string) (*domain.Subscription, error) {
-	return m.findByUnsubToken, m.findByUnsubTokenErr
+	return m.findByUnsubToken, nil
 }
 
 func (m *mockRepo) DeleteSubscription(_ context.Context, id uint) error {
 	m.deletedSubID = id
-	return m.deleteSubErr
+	return nil
 }
 
 func (m *mockRepo) ConfirmSubscription(_ context.Context, id uint) error {
 	m.confirmedID = id
-	return m.confirmErr
-}
-
-func (m *mockRepo) CreateToken(_ context.Context, token *domain.ConfirmationToken) error {
-	m.createdToken = token
-	return m.createTokenErr
+	return nil
 }
 
 func (m *mockRepo) FindTokenByValue(_ context.Context, _ string) (*domain.ConfirmationToken, error) {
-	return m.findToken, m.findTokenErr
+	return m.findToken, nil
 }
 
 func (m *mockRepo) DeleteToken(_ context.Context, id uint) error {
 	m.deletedTokenID = id
-	return m.deleteTokenErr
+	return nil
+}
+
+// fixedTokens returns a fresh deterministic TokenGenerator that cycles
+// through "unsub-token", "confirm-token", ... so tests can assert on
+// persisted values without faking crypto/rand.
+func fixedTokens() TokenGenerator {
+	values := []string{"unsub-token", "confirm-token"}
+	i := 0
+	return func() (string, error) {
+		v := values[i%len(values)]
+		i++
+		return v, nil
+	}
 }
 
 type mockGitHub struct {
@@ -91,7 +93,7 @@ type mockNotifier struct {
 	callCount      int
 }
 
-func (m *mockNotifier) SendConfirmation(email, repo, token, unsubscribeToken string) error {
+func (m *mockNotifier) SendConfirmation(_ context.Context, email, repo, token, unsubscribeToken string) error {
 	m.callCount++
 	m.sentEmail = email
 	m.sentRepo = repo
@@ -163,7 +165,7 @@ func TestSubscribe(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := New(tc.repo, tc.github, tc.notifier)
+			s := New(tc.repo, tc.github, tc.notifier, fixedTokens())
 			err := s.Subscribe(context.Background(), tc.req)
 
 			if !errors.Is(err, tc.wantErr) {
@@ -195,7 +197,7 @@ func assertSubscribeSideEffects(t *testing.T, repo *mockRepo, notifier *mockNoti
 
 func TestSubscribeNotifierFailureSwallowed(t *testing.T) {
 	repo := &mockRepo{}
-	s := New(repo, &mockGitHub{}, &mockNotifier{err: errors.New("smtp down")})
+	s := New(repo, &mockGitHub{}, &mockNotifier{err: errors.New("smtp down")}, fixedTokens())
 
 	err := s.Subscribe(context.Background(), domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"})
 	if err != nil {
@@ -239,7 +241,7 @@ func TestConfirmSubscription(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := New(tc.repo, &mockGitHub{}, &mockNotifier{})
+			s := New(tc.repo, &mockGitHub{}, &mockNotifier{}, fixedTokens())
 			err := s.ConfirmSubscription(context.Background(), tc.tokenValue)
 
 			if !errors.Is(err, tc.wantErr) {

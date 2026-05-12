@@ -1,13 +1,19 @@
 package database
 
 import (
+	"embed"
+	"errors"
 	"fmt"
 
+	"github.com/golang-migrate/migrate/v4"
+	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
 )
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
 // Config bundles Postgres connection knobs. URL wins when set.
 type Config struct {
@@ -39,16 +45,21 @@ func NewPostgres(cfg *Config) (*gorm.DB, error) {
 	return db, nil
 }
 
-func Migrate(db *gorm.DB) error {
-	if err := db.AutoMigrate(&domain.Subscription{}, &domain.ConfirmationToken{}); err != nil {
-		return fmt.Errorf("automigrate: %w", err)
+// Migrate applies pending SQL migrations. Tracking lives in the
+// schema_migrations table managed by golang-migrate.
+func Migrate(gormDB *gorm.DB) error {
+	sqlDB, _ := gormDB.DB()
+	driver, err := migratepg.WithInstance(sqlDB, &migratepg.Config{})
+	if err != nil {
+		return err
 	}
-
-	// Uniqueness scoped to live rows — see README on soft delete + uniqueness.
-	const stmt = `CREATE UNIQUE INDEX IF NOT EXISTS idx_email_repo_live ` +
-		`ON subscriptions (email, repo) WHERE deleted_at IS NULL`
-	if err := db.Exec(stmt).Error; err != nil {
-		return fmt.Errorf("create partial unique index: %w", err)
+	src, _ := iofs.New(migrationsFS, "migrations")
+	m, err := migrate.NewWithInstance("iofs", src, "postgres", driver)
+	if err != nil {
+		return err
+	}
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return err
 	}
 	return nil
 }

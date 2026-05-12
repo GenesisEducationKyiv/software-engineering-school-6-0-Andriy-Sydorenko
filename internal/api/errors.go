@@ -2,28 +2,38 @@ package api
 
 import (
 	"errors"
+	"log"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
 )
 
-// statusMap maps domain errors to HTTP status codes, unmapped errors default to 500.
-var statusMap = map[error]int{
-	domain.ErrInvalidEmail:      http.StatusBadRequest,
-	domain.ErrInvalidRepoFormat: http.StatusBadRequest,
-	domain.ErrRepoNotFound:      http.StatusNotFound,
-	domain.ErrTokenNotFound:     http.StatusNotFound,
-	domain.ErrAlreadySubscribed: http.StatusConflict,
-	domain.ErrRateLimited:       http.StatusServiceUnavailable,
+type httpView struct {
+	status  int
+	message string
 }
 
-// httpStatus walks the wrapped-error chain and returns the first
-// matching status, defaults to 500.
-func httpStatus(err error) int {
-	for sentinel, code := range statusMap {
+// errorView is the single source of truth for translating a domain
+// error into a public HTTP response. Unmapped errors are treated as
+// internal (500) and their text is never returned to the client.
+var errorView = map[error]httpView{
+	domain.ErrInvalidEmail:      {http.StatusBadRequest, "invalid email format"},
+	domain.ErrInvalidRepoFormat: {http.StatusBadRequest, "invalid repository format, expected owner/repo"},
+	domain.ErrRepoNotFound:      {http.StatusNotFound, "repository not found on GitHub or is private"},
+	domain.ErrTokenNotFound:     {http.StatusNotFound, "token not found"},
+	domain.ErrAlreadySubscribed: {http.StatusConflict, "email already subscribed to this repository"},
+	domain.ErrRateLimited:       {http.StatusServiceUnavailable, "service temporarily unavailable, try again later"},
+}
+
+func writeError(c *gin.Context, op string, err error) {
+	for sentinel, v := range errorView {
 		if errors.Is(err, sentinel) {
-			return code
+			c.JSON(v.status, domain.ErrorResponse{Error: v.message})
+			return
 		}
 	}
-	return http.StatusInternalServerError
+	log.Printf("%s error: %v", op, err)
+	c.JSON(http.StatusInternalServerError, domain.ErrorResponse{Error: "internal server error"})
 }

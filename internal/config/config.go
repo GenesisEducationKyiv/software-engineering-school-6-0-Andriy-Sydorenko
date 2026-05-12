@@ -26,9 +26,8 @@ type Config struct {
 	Scanner scanner.Config
 	GitHub  github.Config
 
-	Port           string
-	APIKey         string
-	ScannerEnabled bool
+	Port   string
+	APIKey string
 }
 
 func LoadConfig() (*Config, error) {
@@ -66,9 +65,8 @@ func LoadConfig() (*Config, error) {
 			Token:   os.Getenv("GITHUB_TOKEN"),
 			Timeout: getEnvDuration("GITHUB_TIMEOUT", 10*time.Second),
 		},
-		Port:           getEnvOrDefault("PORT", "8080"),
-		APIKey:         os.Getenv("API_KEY"),
-		ScannerEnabled: getEnvBool("SCANNER_ENABLED", true),
+		Port:   getEnvOrDefault("PORT", "8080"),
+		APIKey: os.Getenv("API_KEY"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -134,18 +132,4 @@ func getEnvInt(key string, fallback int) int {
 		panic(fmt.Sprintf("config: invalid %s %q: %v", key, v, err))
 	}
 	return n
-}
-
-// getEnvBool parses a bool env var, falling back when unset. Malformed
-// values panic — see getEnvDuration for the rationale.
-func getEnvBool(key string, fallback bool) bool {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		panic(fmt.Sprintf("config: invalid %s %q: %v", key, v, err))
-	}
-	return b
 }

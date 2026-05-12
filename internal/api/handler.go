@@ -2,8 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
-	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -63,31 +61,4 @@ func (h *Handler) ConfirmSubscription(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, domain.MessageResponse{Message: "subscription confirmed successfully"})
-}
-
-// writeError maps a service-layer error to an HTTP response. Domain
-// errors expose their own message; unknown errors are logged with the
-// operation tag and return a generic 500 so internals don't leak.
-func writeError(c *gin.Context, op string, err error) {
-	status := httpStatus(err)
-	if status == http.StatusInternalServerError {
-		log.Printf("%s error: %v", op, err)
-		c.JSON(status, domain.ErrorResponse{Error: "internal server error"})
-		return
-	}
-	c.JSON(status, domain.ErrorResponse{Error: errorMessage(err)})
-}
-
-// errorMessage selects the user-visible string for a known domain
-// error, applying friendlier copy where the sentinel's text is too
-// terse for a public response.
-func errorMessage(err error) string {
-	switch {
-	case errors.Is(err, domain.ErrTokenNotFound):
-		return "token not found"
-	case errors.Is(err, domain.ErrRateLimited):
-		return "service temporarily unavailable, try again later"
-	default:
-		return err.Error()
-	}
 }

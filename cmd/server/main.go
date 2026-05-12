@@ -54,11 +54,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if cfg.ScannerEnabled {
-		go scan.Run(ctx)
-	} else {
-		log.Printf("scanner disabled (SCANNER_ENABLED=false)")
-	}
+	go scan.Run(ctx)
 
 	router := api.NewRouter(api.NewHandler(svc), cfg.APIKey)
 

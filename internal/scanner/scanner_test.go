@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,7 +34,10 @@ func (m *mockScannerRepo) FindDistinctConfirmedRepos(_ context.Context) ([]strin
 	return m.repos, m.reposErr
 }
 
-func (m *mockScannerRepo) FindConfirmedSubscriptionsByRepo(_ context.Context, repo string) ([]domain.Subscription, error) {
+func (m *mockScannerRepo) FindConfirmedSubscriptionsByRepo(
+	_ context.Context,
+	repo string,
+) ([]domain.Subscription, error) {
 	m.subsCalls++
 	if m.subsErr != nil {
 		return nil, m.subsErr
@@ -51,18 +55,23 @@ func (m *mockScannerRepo) UpdateLastSeenTag(_ context.Context, id uint, tag stri
 }
 
 type mockFetcher struct {
+	mu    sync.Mutex
 	tags  map[string]string
 	errs  map[string]error
 	calls int
 }
 
 func (m *mockFetcher) GetLatestRelease(_ context.Context, owner, repo string) (string, error) {
+	m.mu.Lock()
 	m.calls++
 	key := owner + "/" + repo
-	if err := m.errs[key]; err != nil {
+	err := m.errs[key]
+	tag := m.tags[key]
+	m.mu.Unlock()
+	if err != nil {
 		return "", err
 	}
-	return m.tags[key], nil
+	return tag, nil
 }
 
 type mockReleaseNotifier struct {
@@ -74,13 +83,22 @@ type sentRelease struct {
 	email, repo, tag, unsubToken string
 }
 
-func (m *mockReleaseNotifier) SendReleaseNotification(email, repo, tag, unsubscribeToken string) error {
+func (m *mockReleaseNotifier) SendReleaseNotification(
+	_ context.Context,
+	email, repo, tag, unsubscribeToken string,
+) error {
 	m.sent = append(m.sent, sentRelease{email, repo, tag, unsubscribeToken})
 	return m.err
 }
 
-func newScanner(repo *mockScannerRepo, fetcher *mockFetcher, notifier *mockReleaseNotifier) *Scanner {
-	return New(repo, fetcher, notifier, time.Minute)
+// newScanner uses concurrency=1 for deterministic dispatch order;
+// parallelism is exercised in workerpool_test.go.
+func newScanner(
+	repo *mockScannerRepo,
+	fetcher *mockFetcher,
+	notifier *mockReleaseNotifier,
+) *Scanner {
+	return New(repo, fetcher, notifier, &Config{Interval: time.Minute, Concurrency: 1})
 }
 
 func TestNewReleaseNotifiesAll(t *testing.T) {

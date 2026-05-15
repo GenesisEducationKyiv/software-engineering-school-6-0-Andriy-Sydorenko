@@ -18,6 +18,13 @@ type Subscription struct {
 	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
+// IsNewTag reports whether tag represents a release the subscription
+// has not been notified about yet. Empty tags are ignored so that an
+// upstream "no releases yet" response is not treated as a regression.
+func (s *Subscription) IsNewTag(tag string) bool {
+	return tag != "" && tag != s.LastSeenTag
+}
+
 type ConfirmationToken struct {
 	ID             uint           `gorm:"primaryKey" json:"-"`
 	Token          string         `gorm:"type:varchar(255);uniqueIndex;not null" json:"token"`

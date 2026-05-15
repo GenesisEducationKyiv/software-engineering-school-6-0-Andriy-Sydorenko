@@ -2,8 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
-	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -33,77 +31,34 @@ func (h *Handler) Subscribe(c *gin.Context) {
 		return
 	}
 
-	err := h.service.Subscribe(c.Request.Context(), req)
-	if err == nil {
-		c.JSON(http.StatusOK, domain.MessageResponse{Message: "subscription successful, confirmation email sent"})
+	if err := h.service.Subscribe(c.Request.Context(), req); err != nil {
+		writeError(c, "subscribe", err)
 		return
 	}
-
-	switch {
-	case errors.Is(err, domain.ErrInvalidRepoFormat):
-		c.JSON(http.StatusBadRequest, domain.ErrorResponse{Error: err.Error()})
-	case errors.Is(err, domain.ErrRepoNotFound):
-		c.JSON(http.StatusNotFound, domain.ErrorResponse{Error: err.Error()})
-	case errors.Is(err, domain.ErrAlreadySubscribed):
-		c.JSON(http.StatusConflict, domain.ErrorResponse{Error: err.Error()})
-	case errors.Is(err, domain.ErrRateLimited):
-		c.JSON(http.StatusServiceUnavailable, domain.ErrorResponse{Error: "service temporarily unavailable, try again later"})
-	default:
-		log.Printf("subscribe error: %v", err)
-		c.JSON(http.StatusInternalServerError, domain.ErrorResponse{Error: "internal server error"})
-	}
+	c.JSON(http.StatusOK, domain.MessageResponse{Message: "subscription successful, confirmation email sent"})
 }
 
 func (h *Handler) Unsubscribe(c *gin.Context) {
-	token := c.Param("token")
-
-	err := h.service.Unsubscribe(c.Request.Context(), token)
-	if err == nil {
-		c.JSON(http.StatusOK, domain.MessageResponse{Message: "unsubscribed successfully"})
+	if err := h.service.Unsubscribe(c.Request.Context(), c.Param("token")); err != nil {
+		writeError(c, "unsubscribe", err)
 		return
 	}
-
-	switch {
-	case errors.Is(err, domain.ErrTokenNotFound):
-		c.JSON(http.StatusNotFound, domain.ErrorResponse{Error: "token not found"})
-	default:
-		log.Printf("unsubscribe error: %v", err)
-		c.JSON(http.StatusInternalServerError, domain.ErrorResponse{Error: "internal server error"})
-	}
+	c.JSON(http.StatusOK, domain.MessageResponse{Message: "unsubscribed successfully"})
 }
 
 func (h *Handler) GetSubscriptions(c *gin.Context) {
-	email := c.Query("email")
-
-	subs, err := h.service.GetSubscriptions(c.Request.Context(), email)
-	if err == nil {
-		c.JSON(http.StatusOK, subs)
+	subs, err := h.service.GetSubscriptions(c.Request.Context(), c.Query("email"))
+	if err != nil {
+		writeError(c, "get subscriptions", err)
 		return
 	}
-
-	switch {
-	case errors.Is(err, domain.ErrInvalidEmail):
-		c.JSON(http.StatusBadRequest, domain.ErrorResponse{Error: err.Error()})
-	default:
-		log.Printf("get subscriptions error: %v", err)
-		c.JSON(http.StatusInternalServerError, domain.ErrorResponse{Error: "internal server error"})
-	}
+	c.JSON(http.StatusOK, subs)
 }
 
 func (h *Handler) ConfirmSubscription(c *gin.Context) {
-	token := c.Param("token")
-
-	err := h.service.ConfirmSubscription(c.Request.Context(), token)
-	if err == nil {
-		c.JSON(http.StatusOK, domain.MessageResponse{Message: "subscription confirmed successfully"})
+	if err := h.service.ConfirmSubscription(c.Request.Context(), c.Param("token")); err != nil {
+		writeError(c, "confirm", err)
 		return
 	}
-
-	switch {
-	case errors.Is(err, domain.ErrTokenNotFound):
-		c.JSON(http.StatusNotFound, domain.ErrorResponse{Error: "token not found"})
-	default:
-		log.Printf("confirm error: %v", err)
-		c.JSON(http.StatusInternalServerError, domain.ErrorResponse{Error: "internal server error"})
-	}
+	c.JSON(http.StatusOK, domain.MessageResponse{Message: "subscription confirmed successfully"})
 }

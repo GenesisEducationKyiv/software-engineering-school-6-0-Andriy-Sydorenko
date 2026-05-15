@@ -35,7 +35,7 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	db, err := database.NewPostgres(cfg.PostgresDSN())
+	db, err := database.NewPostgres(&cfg.DB)
 	if err != nil {
 		return fmt.Errorf("connect db: %w", err)
 	}
@@ -45,32 +45,11 @@ func run() error {
 
 	repo := repository.New(db)
 
-	var gh service.RepoValidator = githubclient.NewClient(cfg.GitHubToken)
-	var fetcher scanner.ReleaseFetcher = githubclient.NewClient(cfg.GitHubToken)
+	gh, fetcher := buildGitHubClients(cfg)
 
-	if cfg.RedisURL != "" {
-		rdb, rerr := cache.NewRedis(cfg.RedisURL)
-		if rerr != nil {
-			log.Printf("redis unavailable, continuing without cache: %v", rerr)
-		} else {
-			cached := githubclient.NewCachedClient(githubclient.NewClient(cfg.GitHubToken), rdb)
-			gh = cached
-			fetcher = cached
-			log.Printf("github client: redis cache enabled")
-		}
-	}
-
-	note := notifier.New(
-		&notifier.Config{
-			Host:     cfg.SMTPHost,
-			Port:     cfg.SMTPPort,
-			Username: cfg.SMTPUserName,
-			Password: cfg.SMTPPassword,
-			BaseURL:  cfg.BaseURL,
-		},
-	)
-	svc := service.New(repo, gh, note)
-	scan := scanner.New(repo, fetcher, note, cfg.ScanInterval)
+	note := notifier.New(&cfg.SMTP)
+	svc := service.New(repo, gh, note, service.RandomToken)
+	scan := scanner.New(repo, fetcher, note, &cfg.Scanner)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -103,4 +82,23 @@ func run() error {
 	}
 	log.Printf("shutdown complete")
 	return nil
+}
+
+// buildGitHubClients returns validator and fetcher views of the
+// GitHub client, optionally wrapped in the Redis cache decorator.
+// Cache failure is non-fatal.
+func buildGitHubClients(cfg *config.Config) (service.RepoValidator, scanner.ReleaseFetcher) {
+	if cfg.Redis.DSN() == "" {
+		c := githubclient.NewClient(&cfg.GitHub)
+		return c, c
+	}
+	rdb, err := cache.NewRedis(&cfg.Redis)
+	if err != nil {
+		log.Printf("redis unavailable, continuing without cache: %v", err)
+		c := githubclient.NewClient(&cfg.GitHub)
+		return c, c
+	}
+	cached := githubclient.NewCachedClient(githubclient.NewClient(&cfg.GitHub), rdb)
+	log.Printf("github client: redis cache enabled")
+	return cached, cached
 }

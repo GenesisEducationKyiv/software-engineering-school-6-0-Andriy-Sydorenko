@@ -12,15 +12,22 @@ import (
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
 )
 
+// Config bundles GitHub-client knobs. Timeout is the authoritative
+// per-request ceiling — callers should not wrap with context.WithTimeout.
+type Config struct {
+	Token   string        // GITHUB_TOKEN; empty uses anon rate limit
+	Timeout time.Duration // per-request ceiling
+}
+
 type Client struct {
 	httpClient *http.Client
 	token      string
 }
 
-func NewClient(token string) *Client {
+func NewClient(cfg *Config) *Client {
 	return &Client{
-		httpClient: &http.Client{Timeout: 10 * time.Second},
-		token:      token,
+		httpClient: &http.Client{Timeout: cfg.Timeout},
+		token:      cfg.Token,
 	}
 }
 

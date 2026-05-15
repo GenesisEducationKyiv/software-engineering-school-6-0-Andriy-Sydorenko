@@ -106,8 +106,8 @@ is the only place that wires the whole graph together.
 3. Calls `GET /repos/{owner}/{repo}` on the GitHub API. A 404
    bubbles up as a 404; a 429 or 403 with `X-RateLimit-Remaining: 0`
    / `Retry-After` becomes a 503.
-4. Generates a 32-byte `crypto/rand` confirmation token plus a
-   separate unsubscribe token (stored on the subscription row
+4. Generates a UUID v4 confirmation token plus a separate
+   UUID v4 unsubscribe token (stored on the subscription row
    itself, long-lived, used in release emails).
 5. Persists the subscription with `confirmed = false` and fires
    the confirmation email. An SMTP failure is logged but does not
@@ -251,7 +251,7 @@ with three things worth mentioning:
 `X-API-Key` header check when `API_KEY` is set. Confirm and
 unsubscribe stay open because they're opened from mail clients,
 which can't attach request headers — the token in the URL is the
-capability for those routes (256 bits of entropy from `crypto/rand`).
+capability for those routes (UUID v4, 122 bits of entropy).
 
 When `API_KEY` is unset, the middleware no-ops. That's convenient
 for local development; production deployments must set the env var.
@@ -284,19 +284,18 @@ start making sense. It doesn't today.
 
 ## Constant-time token comparison
 
-Tokens are 32 bytes of `crypto/rand`, hex-encoded — 64 characters,
-256 bits of entropy. A timing attack against an indexed
-`WHERE token = ?` lookup on that amount of entropy is not
-reachable in practice: you'd need ~10^18 probe requests to leak
-one byte, against an endpoint that returns 404 on bad tokens and
-is rate-limited by any reasonable load balancer.
+Tokens are UUID v4 — 36 characters, 122 bits of entropy. A timing
+attack against an indexed `WHERE token = ?` lookup at that amount
+of entropy is still not reachable in practice (2^122 search space),
+and any sane deployment rate-limits the endpoint anyway.
 
 Switching to `subtle.ConstantTimeCompare` would force a full
 table scan on every confirm / unsubscribe request (or a
-constant-time-equal subquery per row). Real performance cost,
-theoretical attack, wrong trade. If the tokens were shorter
-(≤ 128 bits) or user-chosen, I'd flip the decision — but at 256
-bits the indexed lookup is the right call.
+constant-time-equal subquery per row). Real performance cost for
+a theoretical attack — wrong trade at this entropy level. ADR-005
+flags it as defense-in-depth Future Work; if it ever lands, it
+will likely be paired with shorter tokens or another reason to
+walk the rows.
 
 ---
 
@@ -314,6 +313,15 @@ The HTTP server itself has explicit `ReadHeaderTimeout`,
 `ReadTimeout`, `WriteTimeout` and `IdleTimeout` — using Gin's
 `router.Run(addr)` helper doesn't set any of them, which upsets
 both Slowloris-aware linters and production load balancers.
+
+**No graceful Redis close.** Decision: rely on OS socket reclaim
+on process exit. The only Redis operations are short `Get`/`SetEx`
+calls on a 10-minute TTL cache; a connection dropped mid-write
+costs at most one extra GitHub call from the next caller. Doing
+this properly would require a scanner-goroutine `WaitGroup` join
+plus ordered teardown — ~15 lines of code for operational polish
+(cleaner deploy logs), not correctness. Revisit if Redis-side
+"connection reset" warnings start cluttering deploy dashboards.
 
 ---
 

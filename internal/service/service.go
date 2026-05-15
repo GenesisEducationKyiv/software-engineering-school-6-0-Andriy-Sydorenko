@@ -2,29 +2,36 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"net/mail"
 	"regexp"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
 )
 
 var repoFormatRegex = regexp.MustCompile(`^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$`)
 
-type SubscriptionRepository interface {
-	CreateSubscription(ctx context.Context, sub *domain.Subscription) error
+type SubscriptionRepo interface {
+	CreateSubscriptionWithToken(ctx context.Context, sub *domain.Subscription, token *domain.ConfirmationToken) error
 	FindSubscriptionByEmailAndRepo(ctx context.Context, email, repo string) (*domain.Subscription, error)
 	FindSubscriptionsByEmail(ctx context.Context, email string) ([]domain.Subscription, error)
 	FindSubscriptionByUnsubscribeToken(ctx context.Context, token string) (*domain.Subscription, error)
 	ConfirmSubscription(ctx context.Context, id uint) error
 	DeleteSubscription(ctx context.Context, id uint) error
-	CreateToken(ctx context.Context, token *domain.ConfirmationToken) error
+}
+
+type TokenRepo interface {
 	FindTokenByValue(ctx context.Context, tokenValue string) (*domain.ConfirmationToken, error)
 	DeleteToken(ctx context.Context, id uint) error
+}
+
+type SubscriptionRepository interface {
+	SubscriptionRepo
+	TokenRepo
 }
 
 type RepoValidator interface {
@@ -32,17 +39,46 @@ type RepoValidator interface {
 }
 
 type ConfirmationSender interface {
-	SendConfirmation(email, repo, token, unsubscribeToken string) error
+	SendConfirmation(ctx context.Context, email, repo, token, unsubscribeToken string) error
+}
+
+// TokenGenerator returns a fresh opaque token. Injectable so tests can
+// produce deterministic values without depending on the UUID library.
+type TokenGenerator func() (string, error)
+
+// RandomToken returns a v4 UUID (122 bits of entropy).
+func RandomToken() (string, error) {
+	u, err := uuid.NewRandom()
+	if err != nil {
+		return "", fmt.Errorf("uuid generation failed: %w", err)
+	}
+	return u.String(), nil
 }
 
 type Service struct {
-	repo     SubscriptionRepository
+	subs     SubscriptionRepo
+	tokens   TokenRepo
 	github   RepoValidator
 	notifier ConfirmationSender
+	newToken TokenGenerator
 }
 
-func New(repo SubscriptionRepository, github RepoValidator, notifier ConfirmationSender) *Service {
-	return &Service{repo: repo, github: github, notifier: notifier}
+func New(
+	repo SubscriptionRepository,
+	github RepoValidator,
+	notifier ConfirmationSender,
+	newToken TokenGenerator,
+) *Service {
+	if newToken == nil {
+		newToken = RandomToken
+	}
+	return &Service{
+		subs:     repo,
+		tokens:   repo,
+		github:   github,
+		notifier: notifier,
+		newToken: newToken,
+	}
 }
 
 func (s *Service) Subscribe(ctx context.Context, req domain.SubscribeRequest) error {
@@ -50,7 +86,7 @@ func (s *Service) Subscribe(ctx context.Context, req domain.SubscribeRequest) er
 		return domain.ErrInvalidRepoFormat
 	}
 
-	existing, err := s.repo.FindSubscriptionByEmailAndRepo(ctx, req.Email, req.Repo)
+	existing, err := s.subs.FindSubscriptionByEmailAndRepo(ctx, req.Email, req.Repo)
 	if err != nil {
 		return fmt.Errorf("failed to check existing subscription: %w", err)
 	}
@@ -63,9 +99,13 @@ func (s *Service) Subscribe(ctx context.Context, req domain.SubscribeRequest) er
 		return err
 	}
 
-	unsubToken, err := generateToken()
+	unsubToken, err := s.newToken()
 	if err != nil {
 		return fmt.Errorf("failed to generate unsubscribe token: %w", err)
+	}
+	confirmToken, err := s.newToken()
+	if err != nil {
+		return fmt.Errorf("failed to generate confirmation token: %w", err)
 	}
 
 	sub := &domain.Subscription{
@@ -73,24 +113,15 @@ func (s *Service) Subscribe(ctx context.Context, req domain.SubscribeRequest) er
 		Repo:             req.Repo,
 		UnsubscribeToken: unsubToken,
 	}
-	if err := s.repo.CreateSubscription(ctx, sub); err != nil {
-		return fmt.Errorf("failed to create subscription: %w", err)
+	token := &domain.ConfirmationToken{Token: confirmToken}
+
+	if err := s.subs.CreateSubscriptionWithToken(ctx, sub, token); err != nil {
+		return fmt.Errorf("failed to persist subscription: %w", err)
 	}
 
-	tokenValue, err := generateToken()
-	if err != nil {
-		return fmt.Errorf("failed to generate confirmation token: %w", err)
-	}
-
-	token := &domain.ConfirmationToken{
-		Token:          tokenValue,
-		SubscriptionID: sub.ID,
-	}
-	if err := s.repo.CreateToken(ctx, token); err != nil {
-		return fmt.Errorf("failed to save confirmation token: %w", err)
-	}
-
-	if err := s.notifier.SendConfirmation(req.Email, req.Repo, tokenValue, unsubToken); err != nil {
+	if err := s.notifier.SendConfirmation(ctx, req.Email, req.Repo, confirmToken, unsubToken); err != nil {
+		// Persist-then-send: the row is the durable commitment; SMTP is
+		// best-effort and surfaced via log alerting, not 5xx fan-out.
 		log.Printf("failed to send confirmation email for repo=%s: %v", req.Repo, err)
 	}
 
@@ -102,7 +133,7 @@ func (s *Service) ConfirmSubscription(ctx context.Context, tokenValue string) er
 		return domain.ErrTokenNotFound
 	}
 
-	token, err := s.repo.FindTokenByValue(ctx, tokenValue)
+	token, err := s.tokens.FindTokenByValue(ctx, tokenValue)
 	if err != nil {
 		return fmt.Errorf("failed to look up token: %w", err)
 	}
@@ -110,11 +141,11 @@ func (s *Service) ConfirmSubscription(ctx context.Context, tokenValue string) er
 		return domain.ErrTokenNotFound
 	}
 
-	if err := s.repo.ConfirmSubscription(ctx, token.SubscriptionID); err != nil {
+	if err := s.subs.ConfirmSubscription(ctx, token.SubscriptionID); err != nil {
 		return fmt.Errorf("failed to confirm subscription id=%d: %w", token.SubscriptionID, err)
 	}
 
-	if err := s.repo.DeleteToken(ctx, token.ID); err != nil {
+	if err := s.tokens.DeleteToken(ctx, token.ID); err != nil {
 		log.Printf("failed to delete used confirmation token id=%d: %v", token.ID, err)
 	}
 
@@ -126,7 +157,7 @@ func (s *Service) Unsubscribe(ctx context.Context, tokenValue string) error {
 		return domain.ErrTokenNotFound
 	}
 
-	sub, err := s.repo.FindSubscriptionByUnsubscribeToken(ctx, tokenValue)
+	sub, err := s.subs.FindSubscriptionByUnsubscribeToken(ctx, tokenValue)
 	if err != nil {
 		return fmt.Errorf("failed to look up unsubscribe token: %w", err)
 	}
@@ -134,7 +165,7 @@ func (s *Service) Unsubscribe(ctx context.Context, tokenValue string) error {
 		return domain.ErrTokenNotFound
 	}
 
-	if err := s.repo.DeleteSubscription(ctx, sub.ID); err != nil {
+	if err := s.subs.DeleteSubscription(ctx, sub.ID); err != nil {
 		return fmt.Errorf("failed to delete subscription id=%d: %w", sub.ID, err)
 	}
 
@@ -150,18 +181,10 @@ func (s *Service) GetSubscriptions(ctx context.Context, email string) ([]domain.
 		return nil, domain.ErrInvalidEmail
 	}
 
-	subs, err := s.repo.FindSubscriptionsByEmail(ctx, email)
+	subs, err := s.subs.FindSubscriptionsByEmail(ctx, email)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch subscriptions: %w", err)
 	}
 
 	return domain.ToSubscriptionListResponse(subs), nil
-}
-
-func generateToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("crypto/rand failed: %w", err)
-	}
-	return hex.EncodeToString(b), nil
 }

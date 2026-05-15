@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
@@ -21,32 +22,60 @@ type ReleaseFetcher interface {
 }
 
 type ReleaseNotifier interface {
-	SendReleaseNotification(email, repo, tag, unsubscribeToken string) error
+	SendReleaseNotification(ctx context.Context, email, repo, tag, unsubscribeToken string) error
+}
+
+// Config bundles scanner knobs. The per-GitHub-call deadline lives on
+// the GitHub client, not here.
+type Config struct {
+	Interval    time.Duration // default 5m
+	Concurrency int           // default 8
+}
+
+func (c *Config) withDefaults() {
+	if c.Interval <= 0 {
+		c.Interval = 5 * time.Minute
+	}
+	if c.Concurrency <= 0 {
+		c.Concurrency = 8
+	}
 }
 
 type Scanner struct {
 	repo     Repository
 	github   ReleaseFetcher
 	notifier ReleaseNotifier
-	interval time.Duration
+	pool     *WorkerPool
+	cfg      Config
 }
 
 func New(
 	repo Repository,
 	github ReleaseFetcher,
 	notifier ReleaseNotifier,
-	interval time.Duration,
+	cfg *Config,
 ) *Scanner {
-	return &Scanner{repo: repo, github: github, notifier: notifier, interval: interval}
+	cfg.withDefaults()
+	return &Scanner{
+		repo:     repo,
+		github:   github,
+		notifier: notifier,
+		pool:     NewWorkerPool(cfg.Concurrency),
+		cfg:      *cfg,
+	}
 }
 
 func (s *Scanner) Run(ctx context.Context) {
-	log.Printf("scanner started with interval=%s", s.interval)
+	log.Printf("scanner started: interval=%s concurrency=%d", s.cfg.Interval, s.cfg.Concurrency)
 
-	ticker := time.NewTicker(s.interval)
+	ticker := time.NewTicker(s.cfg.Interval)
 	defer ticker.Stop()
 
 	s.runOnce(ctx)
+
+	// If a tick exceeds 0.8 × interval, drain the next pending tick so
+	// we don't immediately re-fire after a long run.
+	budget := s.cfg.Interval * 8 / 10
 
 	for {
 		select {
@@ -54,7 +83,15 @@ func (s *Scanner) Run(ctx context.Context) {
 			log.Printf("scanner stopped: %v", ctx.Err())
 			return
 		case <-ticker.C:
+			start := time.Now()
 			s.runOnce(ctx)
+			if elapsed := time.Since(start); elapsed > budget {
+				log.Printf("scanner: tick exceeded budget (%s > %s), skipping next tick", elapsed, budget)
+				select {
+				case <-ticker.C:
+				default:
+				}
+			}
 		}
 	}
 }
@@ -66,21 +103,29 @@ func (s *Scanner) runOnce(ctx context.Context) {
 		return
 	}
 
-	for _, repo := range repos {
-		if ctx.Err() != nil {
+	// Signal-only abort (not ctx cancel) so in-flight workers keep their
+	// per-call deadlines; siblings short-circuit on the next check.
+	var rateLimitHit atomic.Bool
+
+	s.pool.Run(ctx, repos, func(ctx context.Context, repo string) {
+		if rateLimitHit.Load() {
 			return
 		}
 		if err := s.safeCheckRepo(ctx, repo); err != nil {
 			if errors.Is(err, domain.ErrRateLimited) {
-				log.Printf("scanner: GitHub rate limit hit, aborting cycle")
+				if rateLimitHit.CompareAndSwap(false, true) {
+					log.Printf("scanner: GitHub rate limit hit, aborting cycle")
+				}
 				return
 			}
 			log.Printf("scanner: repo=%s error: %v", repo, err)
 		}
-	}
+	})
 }
 
-// safeCheckRepo recovers from panics so one bad repo doesn't kill the goroutine.
+// safeCheckRepo recovers from panics so one bad repo doesn't tear down
+// the worker pool. The panic is logged once here and the caller sees nil
+// — it's a terminal event for that repo, not a propagatable error.
 func (s *Scanner) safeCheckRepo(ctx context.Context, repo string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -97,6 +142,9 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		return domain.ErrInvalidRepoFormat
 	}
 
+	// Per-call deadline is enforced by the GitHub client itself
+	// (httpClient.Timeout, set from config.GitHubTimeout). A hung
+	// upstream cannot stall the worker; the pool stays drainable.
 	tag, err := s.github.GetLatestRelease(ctx, parts[0], parts[1])
 	if err != nil {
 		return err
@@ -112,17 +160,18 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 
 	for i := range subs {
 		sub := &subs[i]
-		if sub.LastSeenTag == tag {
+		if !sub.IsNewTag(tag) {
 			continue
 		}
+		previous := sub.LastSeenTag
 		if err := s.repo.UpdateLastSeenTag(ctx, sub.ID, tag); err != nil {
 			log.Printf("scanner: failed to update last_seen_tag for id=%d: %v", sub.ID, err)
 			continue
 		}
-		if sub.LastSeenTag == "" {
+		if previous == "" {
 			continue
 		}
-		if err := s.notifier.SendReleaseNotification(sub.Email, sub.Repo, tag, sub.UnsubscribeToken); err != nil {
+		if err := s.notifier.SendReleaseNotification(ctx, sub.Email, sub.Repo, tag, sub.UnsubscribeToken); err != nil {
 			log.Printf("scanner: failed to notify %s about %s@%s: %v", sub.Email, repo, tag, err)
 		}
 	}

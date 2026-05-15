@@ -17,8 +17,20 @@ func New(db *gorm.DB) *Repository {
 	return &Repository{db: db}
 }
 
-func (r *Repository) CreateSubscription(ctx context.Context, sub *domain.Subscription) error {
-	return r.db.WithContext(ctx).Create(sub).Error
+// CreateSubscriptionWithToken writes both rows in one transaction so
+// they can't split-fail.
+func (r *Repository) CreateSubscriptionWithToken(
+	ctx context.Context,
+	sub *domain.Subscription,
+	token *domain.ConfirmationToken,
+) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(sub).Error; err != nil {
+			return err
+		}
+		token.SubscriptionID = sub.ID
+		return tx.Create(token).Error
+	})
 }
 
 func (r *Repository) FindSubscriptionByEmailAndRepo(ctx context.Context, email, repo string) (*domain.Subscription, error) {
@@ -62,10 +74,6 @@ func (r *Repository) DeleteSubscription(ctx context.Context, id uint) error {
 	return r.db.WithContext(ctx).Delete(&domain.Subscription{}, id).Error
 }
 
-func (r *Repository) CreateToken(ctx context.Context, token *domain.ConfirmationToken) error {
-	return r.db.WithContext(ctx).Create(token).Error
-}
-
 func (r *Repository) FindTokenByValue(ctx context.Context, tokenValue string) (*domain.ConfirmationToken, error) {
 	var token domain.ConfirmationToken
 	err := r.db.WithContext(ctx).
@@ -80,12 +88,6 @@ func (r *Repository) FindTokenByValue(ctx context.Context, tokenValue string) (*
 
 func (r *Repository) DeleteToken(ctx context.Context, id uint) error {
 	return r.db.WithContext(ctx).Delete(&domain.ConfirmationToken{}, id).Error
-}
-
-func (r *Repository) DeleteTokensBySubscriptionID(ctx context.Context, subscriptionID uint) error {
-	return r.db.WithContext(ctx).
-		Where("subscription_id = ?", subscriptionID).
-		Delete(&domain.ConfirmationToken{}).Error
 }
 
 func (r *Repository) FindDistinctConfirmedRepos(ctx context.Context) ([]string, error) {

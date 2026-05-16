@@ -1,0 +1,67 @@
+name: E2E tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Playwright + docker-compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Bring up E2E stack
+        # Compose builds the e2e-server image (stubbed GitHub + stdout
+        # mailer) and waits for Postgres health before starting the app.
+        run: docker compose -f docker-compose.e2e.yml up --build -d
+
+      - name: Wait for app to be ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/health >/dev/null; then
+              echo "app is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "app failed to become ready"; exit 1
+
+      - name: Install Playwright deps
+        working-directory: e2e
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - name: Install Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        working-directory: e2e
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 7
+
+      - name: Dump app logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.e2e.yml logs app
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose -f docker-compose.e2e.yml down -v

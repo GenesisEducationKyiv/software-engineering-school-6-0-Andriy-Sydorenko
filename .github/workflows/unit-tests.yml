@@ -1,0 +1,28 @@
+name: Unit tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: go test ./...
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: Download modules
+        run: go mod download
+      - name: Run unit tests
+        # Integration tests are gated behind the `integration` build tag
+        # and run in integration-tests.yml. -race detects data races,
+        # -count=1 disables the test cache so flakes can't hide.
+        run: go test ./... -race -count=1

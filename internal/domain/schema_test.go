@@ -3,6 +3,9 @@ package domain
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestToSubscriptionResponse(t *testing.T) {
@@ -16,10 +19,10 @@ func TestToSubscriptionResponse(t *testing.T) {
 	}
 	got := ToSubscriptionResponse(s)
 
-	if got.Email != s.Email || got.Repo != s.Repo ||
-		got.Confirmed != s.Confirmed || got.LastSeenTag != s.LastSeenTag {
-		t.Fatalf("bad conversion: %+v", got)
-	}
+	assert.Equal(t, s.Email, got.Email)
+	assert.Equal(t, s.Repo, got.Repo)
+	assert.Equal(t, s.Confirmed, got.Confirmed)
+	assert.Equal(t, s.LastSeenTag, got.LastSeenTag)
 }
 
 func TestSubscriptionResponseJSONShape(t *testing.T) {
@@ -31,23 +34,15 @@ func TestSubscriptionResponseJSONShape(t *testing.T) {
 	}
 
 	b, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	require.NoError(t, err)
 
 	var generic map[string]any
-	if err := json.Unmarshal(b, &generic); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	require.NoError(t, json.Unmarshal(b, &generic))
 
 	wantKeys := []string{"email", "repo", "confirmed", "last_seen_tag"}
-	if len(generic) != len(wantKeys) {
-		t.Fatalf("want %d keys, got %d: %v", len(wantKeys), len(generic), generic)
-	}
+	assert.Len(t, generic, len(wantKeys), "no unexpected fields in public JSON")
 	for _, k := range wantKeys {
-		if _, ok := generic[k]; !ok {
-			t.Fatalf("missing key %q in %v", k, generic)
-		}
+		assert.Contains(t, generic, k)
 	}
 }
 
@@ -58,10 +53,7 @@ func TestToSubscriptionListResponse(t *testing.T) {
 	}
 	got := ToSubscriptionListResponse(subs)
 
-	if len(got) != 2 {
-		t.Fatalf("want 2 responses, got %d", len(got))
-	}
-	if got[1].Repo != "gin-gonic/gin" || !got[1].Confirmed {
-		t.Fatalf("bad element: %+v", got[1])
-	}
+	require.Len(t, got, 2)
+	assert.Equal(t, "gin-gonic/gin", got[1].Repo)
+	assert.True(t, got[1].Confirmed)
 }

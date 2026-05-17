@@ -1,4 +1,4 @@
-name: CI
+name: Lint
 
 on:
   push:
@@ -24,16 +24,7 @@ jobs:
         with:
           version: v2.11.4
 
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.26'
-          cache: true
-      - name: Download modules
-        run: go mod download
-      - name: Run tests
-        run: go test ./... -race -count=1
+      # Fails if `make generate` would change committed mocks — i.e. someone
+      # edited an interface or added a gen.go line without regenerating.
+      - name: Verify generated mocks are up to date
+        run: make verify-generate

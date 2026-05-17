@@ -17,22 +17,31 @@ import (
 type Config struct {
 	Token   string        // GITHUB_TOKEN; empty uses anon rate limit
 	Timeout time.Duration // per-request ceiling
+	BaseURL string        // GITHUB_API_URL override; empty = https://api.github.com
 }
+
+const defaultBaseURL = "https://api.github.com"
 
 type Client struct {
 	httpClient *http.Client
 	token      string
+	baseURL    string
 }
 
 func NewClient(cfg *Config) *Client {
+	base := cfg.BaseURL
+	if base == "" {
+		base = defaultBaseURL
+	}
 	return &Client{
 		httpClient: &http.Client{Timeout: cfg.Timeout},
 		token:      cfg.Token,
+		baseURL:    base,
 	}
 }
 
 func (g *Client) ValidateRepo(ctx context.Context, owner, repo string) error {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s", owner, repo)
+	url := fmt.Sprintf("%s/repos/%s/%s", g.baseURL, owner, repo)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
@@ -62,7 +71,7 @@ func (g *Client) ValidateRepo(ctx context.Context, owner, repo string) error {
 }
 
 func (g *Client) GetLatestRelease(ctx context.Context, owner, repo string) (string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
+	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", g.baseURL, owner, repo)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {

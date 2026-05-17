@@ -11,17 +11,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
 )
 
-// newTestClient wires a real Client at an httptest server via a host-rewriting transport.
-func newTestClient(t *testing.T, handler http.HandlerFunc) (client *Client, cleanup func()) {
+// newTestClient: real Client routed at an httptest server via a host-rewriting transport.
+func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(handler)
-	client = NewClient(&Config{Timeout: 10 * time.Second})
-	client.httpClient = srv.Client()
-	client.httpClient.Transport = &hostRewrite{target: srv.URL, base: srv.Client().Transport}
-	return client, srv.Close
+	t.Cleanup(srv.Close)
+
+	c := NewClient(&Config{Timeout: 10 * time.Second})
+	c.httpClient = srv.Client()
+	c.httpClient.Transport = &hostRewrite{target: srv.URL, base: srv.Client().Transport}
+	return c
 }
 
 type hostRewrite struct {
@@ -30,11 +35,8 @@ type hostRewrite struct {
 }
 
 func (h *hostRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Loopback-only guard: a misconfigured test must not hit the real network.
-	if !strings.HasPrefix(h.target, "http://127.0.0.1:") && !strings.HasPrefix(
-		h.target,
-		"http://[::1]:",
-	) {
+	// Loopback-only: a misconfigured test must not hit the real network.
+	if !strings.HasPrefix(h.target, "http://127.0.0.1:") && !strings.HasPrefix(h.target, "http://[::1]:") {
 		return nil, errors.New("hostRewrite: target must be an httptest loopback server")
 	}
 
@@ -44,11 +46,9 @@ func (h *hostRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	newReq := req.Clone(req.Context())
-
 	newURL := *req.URL
 	newURL.Scheme = targetURL.Scheme
 	newURL.Host = targetURL.Host
-
 	newReq.URL = &newURL
 	newReq.Host = targetURL.Host
 	newReq.Header = req.Header.Clone()
@@ -60,32 +60,6 @@ func (h *hostRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
 	return base.RoundTrip(newReq)
 }
 
-func runValidateCase(t *testing.T, handler http.HandlerFunc, wantErr error, errorKind string) {
-	t.Helper()
-	c, cleanup := newTestClient(t, handler)
-	defer cleanup()
-
-	err := c.ValidateRepo(context.Background(), "owner", "repo")
-
-	switch {
-	case wantErr != nil:
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("got err=%v, want %v", err, wantErr)
-		}
-	case errorKind != "":
-		if err == nil {
-			t.Fatal("expected error, got nil")
-		}
-		if !strings.Contains(err.Error(), errorKind) {
-			t.Fatalf("want error containing %q, got %v", errorKind, err)
-		}
-	default:
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
-}
-
 func TestValidateRepoStatusMapping(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -93,33 +67,31 @@ func TestValidateRepoStatusMapping(t *testing.T) {
 		wantErr   error
 		errorKind string
 	}{
-		{
-			"200 OK",
+		{"200 OK",
 			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
-			nil, "",
-		},
-		{
-			"404 not found",
+			nil, ""},
+		{"404 not found",
 			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) },
-			domain.ErrRepoNotFound, "",
-		},
-		{
-			"500 unexpected",
-			func(
-				w http.ResponseWriter,
-				_ *http.Request,
-			) {
-				w.WriteHeader(http.StatusInternalServerError)
-			},
-			nil, "unexpected",
-		},
+			domain.ErrRepoNotFound, ""},
+		{"500 unexpected",
+			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) },
+			nil, "unexpected"},
 	}
 	for _, tc := range tests {
-		t.Run(
-			tc.name, func(t *testing.T) {
-				runValidateCase(t, tc.handler, tc.wantErr, tc.errorKind)
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestClient(t, tc.handler)
+			err := c.ValidateRepo(context.Background(), "owner", "repo")
+
+			switch {
+			case tc.wantErr != nil:
+				assert.ErrorIs(t, err, tc.wantErr)
+			case tc.errorKind != "":
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errorKind)
+			default:
+				assert.NoError(t, err)
+			}
+		})
 	}
 }
 
@@ -130,44 +102,37 @@ func TestValidateRepoRateLimitDetection(t *testing.T) {
 		wantErr   error
 		errorKind string
 	}{
-		{
-			"429 too many requests",
-			func(
-				w http.ResponseWriter,
-				_ *http.Request,
-			) {
-				w.WriteHeader(http.StatusTooManyRequests)
-			},
-			domain.ErrRateLimited, "",
-		},
-		{
-			"403 primary rate limit (remaining=0)",
+		{"429 too many requests",
+			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTooManyRequests) },
+			domain.ErrRateLimited, ""},
+		{"403 primary rate limit (remaining=0)",
 			func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("X-RateLimit-Remaining", "0")
 				w.WriteHeader(http.StatusForbidden)
 			},
-			domain.ErrRateLimited, "",
-		},
-		{
-			"403 secondary rate limit (Retry-After)",
+			domain.ErrRateLimited, ""},
+		{"403 secondary rate limit (Retry-After)",
 			func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Retry-After", "60")
 				w.WriteHeader(http.StatusForbidden)
 			},
-			domain.ErrRateLimited, "",
-		},
-		{
-			"403 non-rate-limit (SAML required etc.)",
+			domain.ErrRateLimited, ""},
+		{"403 non-rate-limit (SAML required etc.)",
 			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) },
-			nil, "forbidden",
-		},
+			nil, "forbidden"},
 	}
 	for _, tc := range tests {
-		t.Run(
-			tc.name, func(t *testing.T) {
-				runValidateCase(t, tc.handler, tc.wantErr, tc.errorKind)
-			},
-		)
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestClient(t, tc.handler)
+			err := c.ValidateRepo(context.Background(), "owner", "repo")
+
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errorKind)
+			}
+		})
 	}
 }
 
@@ -178,59 +143,41 @@ func TestGetLatestRelease(t *testing.T) {
 		wantTag string
 		wantErr error
 	}{
-		{
-			name: "200 returns tag",
-			handler: func(w http.ResponseWriter, _ *http.Request) {
+		{"200 returns tag",
+			func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(`{"tag_name":"v1.2.3"}`))
 			},
-			wantTag: "v1.2.3",
-		},
-		{
-			name: "404 returns empty tag, no error",
-			handler: func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusNotFound)
-			},
-			wantTag: "",
-		},
-		{
-			name: "429 surfaces domain.ErrRateLimited",
-			handler: func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusTooManyRequests)
-			},
-			wantErr: domain.ErrRateLimited,
-		},
+			"v1.2.3", nil},
+		{"404 returns empty tag, no error",
+			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) },
+			"", nil},
+		{"429 surfaces domain.ErrRateLimited",
+			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTooManyRequests) },
+			"", domain.ErrRateLimited},
 	}
 
 	for _, tc := range tests {
-		t.Run(
-			tc.name, func(t *testing.T) {
-				c, cleanup := newTestClient(t, tc.handler)
-				defer cleanup()
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestClient(t, tc.handler)
+			tag, err := c.GetLatestRelease(context.Background(), "owner", "repo")
 
-				tag, err := c.GetLatestRelease(context.Background(), "owner", "repo")
-
-				if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
-					t.Fatalf("got err=%v, want %v", err, tc.wantErr)
-				}
-				if tc.wantErr == nil && err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if tag != tc.wantTag {
-					t.Fatalf("tag=%q, want %q", tag, tc.wantTag)
-				}
-			},
-		)
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+			assert.Equal(t, tc.wantTag, tag)
+		})
 	}
 }
 
 func TestSendsAuthHeader(t *testing.T) {
 	var gotAuth string
-	handler := func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusOK)
-	}
-	srv := httptest.NewServer(http.HandlerFunc(handler))
+	}))
 	defer srv.Close()
 
 	c := NewClient(&Config{Token: "secret-token", Timeout: 10 * time.Second})
@@ -239,7 +186,5 @@ func TestSendsAuthHeader(t *testing.T) {
 
 	_ = c.ValidateRepo(context.Background(), "owner", "repo")
 
-	if gotAuth != "Bearer secret-token" {
-		t.Fatalf("auth header=%q, want Bearer secret-token", gotAuth)
-	}
+	assert.Equal(t, "Bearer secret-token", gotAuth)
 }

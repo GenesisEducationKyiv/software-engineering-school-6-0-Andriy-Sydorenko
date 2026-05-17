@@ -5,142 +5,125 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
+
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/cache"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/github/mocks"
 )
 
-type fakeStore struct {
-	mu   sync.Mutex
-	data map[string]string
-}
-
-func newFakeStore() *fakeStore { return &fakeStore{data: map[string]string{}} }
-
-func (f *fakeStore) Get(_ context.Context, key string) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	v, ok := f.data[key]
-	if !ok {
-		return "", cache.ErrMiss
-	}
-	return v, nil
-}
-
-func (f *fakeStore) SetEx(_ context.Context, key, value string, _ time.Duration) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.data[key] = value
-	return nil
-}
-
-func TestCachedValidateRepoCachesOK(t *testing.T) {
+// newCachedClient wires a mock Store + real Client + httptest upstream; the returned int counts upstream hits.
+func newCachedClient(t *testing.T, handler http.HandlerFunc) (*CachedClient, *mocks.MockStore, *int) {
+	t.Helper()
 	var calls int
-	srv := httptest.NewServer(
-		http.HandlerFunc(
-			func(w http.ResponseWriter, _ *http.Request) {
-				calls++
-				w.WriteHeader(http.StatusOK)
-			},
-		),
-	)
-	defer srv.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		handler(w, r)
+	}))
+	t.Cleanup(srv.Close)
 
 	inner := NewClient(&Config{Timeout: 10 * time.Second})
 	inner.httpClient = srv.Client()
 	inner.httpClient.Transport = &hostRewrite{target: srv.URL}
-	c := NewCachedClient(inner, newFakeStore())
+
+	ctrl := gomock.NewController(t)
+	store := mocks.NewMockStore(ctrl)
+	return NewCachedClient(inner, store), store, &calls
+}
+
+func TestCachedValidateRepo_CachesOK(t *testing.T) {
+	c, store, upstreamCalls := newCachedClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	key := "gh:validate:owner/repo"
+	store.EXPECT().Get(gomock.Any(), key).Return("", cache.ErrMiss)
+	store.EXPECT().SetEx(gomock.Any(), key, cachedOK, gomock.Any()).Return(nil)
+	store.EXPECT().Get(gomock.Any(), key).Return(cachedOK, nil).Times(2)
 
 	for i := 0; i < 3; i++ {
-		if err := c.ValidateRepo(context.Background(), "owner", "repo"); err != nil {
-			t.Fatalf("call %d: %v", i, err)
-		}
+		require.NoError(t, c.ValidateRepo(context.Background(), "owner", "repo"))
 	}
-	if calls != 1 {
-		t.Fatalf("want 1 GitHub call after cache, got %d", calls)
-	}
+	assert.Equal(t, 1, *upstreamCalls, "second and third calls must hit cache only")
 }
 
-func TestCachedValidateRepoCachesNotFound(t *testing.T) {
-	var calls int
-	srv := httptest.NewServer(
-		http.HandlerFunc(
-			func(w http.ResponseWriter, _ *http.Request) {
-				calls++
-				w.WriteHeader(http.StatusNotFound)
-			},
-		),
-	)
-	defer srv.Close()
+func TestCachedValidateRepo_CachesNotFound(t *testing.T) {
+	c, store, upstreamCalls := newCachedClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
 
-	inner := NewClient(&Config{Timeout: 10 * time.Second})
-	inner.httpClient = srv.Client()
-	inner.httpClient.Transport = &hostRewrite{target: srv.URL}
-	c := NewCachedClient(inner, newFakeStore())
+	key := "gh:validate:owner/repo"
+	store.EXPECT().Get(gomock.Any(), key).Return("", cache.ErrMiss)
+	store.EXPECT().SetEx(gomock.Any(), key, cachedNotFound, gomock.Any()).Return(nil)
+	store.EXPECT().Get(gomock.Any(), key).Return(cachedNotFound, nil).Times(2)
 
 	for i := 0; i < 3; i++ {
 		err := c.ValidateRepo(context.Background(), "owner", "repo")
-		if !errors.Is(err, domain.ErrRepoNotFound) {
-			t.Fatalf("call %d: want ErrRepoNotFound, got %v", i, err)
-		}
+		require.ErrorIs(t, err, domain.ErrRepoNotFound)
 	}
-	if calls != 1 {
-		t.Fatalf("404 not cached; got %d upstream calls", calls)
-	}
+	assert.Equal(t, 1, *upstreamCalls, "404s must be cached to avoid hammering GitHub")
 }
 
-func TestCachedGetLatestReleaseCachesTag(t *testing.T) {
-	var calls int
-	srv := httptest.NewServer(
-		http.HandlerFunc(
-			func(w http.ResponseWriter, _ *http.Request) {
-				calls++
-				_, _ = w.Write([]byte(`{"tag_name":"v1.2.3"}`))
-			},
-		),
-	)
-	defer srv.Close()
+func TestCachedGetLatestRelease_CachesTag(t *testing.T) {
+	c, store, upstreamCalls := newCachedClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v1.2.3"}`))
+	})
 
-	inner := NewClient(&Config{Timeout: 10 * time.Second})
-	inner.httpClient = srv.Client()
-	inner.httpClient.Transport = &hostRewrite{target: srv.URL}
-	c := NewCachedClient(inner, newFakeStore())
+	key := "gh:latest:owner/repo"
+	store.EXPECT().Get(gomock.Any(), key).Return("", cache.ErrMiss)
+	store.EXPECT().SetEx(gomock.Any(), key, "v1.2.3", gomock.Any()).Return(nil)
+	store.EXPECT().Get(gomock.Any(), key).Return("v1.2.3", nil)
 
 	for i := 0; i < 2; i++ {
 		tag, err := c.GetLatestRelease(context.Background(), "owner", "repo")
-		if err != nil || tag != "v1.2.3" {
-			t.Fatalf("call %d: tag=%q err=%v", i, tag, err)
-		}
+		require.NoError(t, err)
+		assert.Equal(t, "v1.2.3", tag)
 	}
-	if calls != 1 {
-		t.Fatalf("want 1 upstream call, got %d", calls)
-	}
+	assert.Equal(t, 1, *upstreamCalls)
 }
 
 func TestCachedRateLimitNotCached(t *testing.T) {
-	var calls int
-	srv := httptest.NewServer(
-		http.HandlerFunc(
-			func(w http.ResponseWriter, _ *http.Request) {
-				calls++
-				w.WriteHeader(http.StatusTooManyRequests)
-			},
-		),
-	)
-	defer srv.Close()
+	// 429 must NOT be cached — would block calls past the rate-limit window. No SetEx EXPECT guards this.
+	c, store, upstreamCalls := newCachedClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
 
-	inner := NewClient(&Config{Timeout: 10 * time.Second})
-	inner.httpClient = srv.Client()
-	inner.httpClient.Transport = &hostRewrite{target: srv.URL}
-	c := NewCachedClient(inner, newFakeStore())
+	store.EXPECT().Get(gomock.Any(), gomock.Any()).Return("", cache.ErrMiss).Times(2)
 
 	_ = c.ValidateRepo(context.Background(), "owner", "repo")
 	_ = c.ValidateRepo(context.Background(), "owner", "repo")
 
-	if calls != 2 {
-		t.Fatalf("rate-limit responses must NOT be cached; got %d calls", calls)
-	}
+	assert.Equal(t, 2, *upstreamCalls)
+}
+
+func TestCachedValidateRepo_FallsThroughOnStoreError(t *testing.T) {
+	// Redis down (non-ErrMiss): must degrade to upstream, not fail the request.
+	c, store, upstreamCalls := newCachedClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	store.EXPECT().Get(gomock.Any(), gomock.Any()).Return("", errors.New("redis: connection refused"))
+	store.EXPECT().SetEx(gomock.Any(), gomock.Any(), cachedOK, gomock.Any()).Return(nil)
+
+	require.NoError(t, c.ValidateRepo(context.Background(), "owner", "repo"))
+	assert.Equal(t, 1, *upstreamCalls, "broken cache must not break the request")
+}
+
+func TestCachedGetLatestRelease_FallsThroughOnStoreError(t *testing.T) {
+	c, store, upstreamCalls := newCachedClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v9.9.9"}`))
+	})
+
+	store.EXPECT().Get(gomock.Any(), gomock.Any()).Return("", errors.New("redis: timeout"))
+	store.EXPECT().SetEx(gomock.Any(), gomock.Any(), "v9.9.9", gomock.Any()).Return(nil)
+
+	tag, err := c.GetLatestRelease(context.Background(), "owner", "repo")
+	require.NoError(t, err)
+	assert.Equal(t, "v9.9.9", tag)
+	assert.Equal(t, 1, *upstreamCalls)
 }

@@ -1,37 +1,33 @@
-.PHONY: unit integration e2e e2e-up e2e-down test build-check
+.PHONY: test test-unit test-integration test-e2e build-check generate mocks
 
-# Compile every main package without producing any artifact files.
-# Use this instead of `go build ./cmd/<name>`, which drops a stray
-# binary in the repo root.
+# Compile every main package without producing artifact files.
+# Vets default + integration + e2e tagged code.
 build-check:
 	go build -o /dev/null ./cmd/server
-	go build -o /dev/null ./cmd/e2e-server
 	go vet ./...
+	go vet -tags=integration ./internal/integration/...
+	go vet -tags=e2e ./e2e/...
+
+# Regenerate mocks. Run after changing any interface with a //go:generate
+# directive. Idempotent — overwrites internal/<pkg>/mocks/.
+generate:
+	go generate ./internal/...
+
+mocks: generate
 
 # Unit tests — no containers, fast.
-unit:
+test-unit:
 	go test ./... -race -count=1
 
 # Integration tests — testcontainers boots Postgres automatically.
-integration:
-	go test -tags=integration -timeout=5m -count=1 ./internal/integration/...
+test-integration:
+	go test -tags=integration -timeout=2m -count=1 ./internal/integration/...
 
-# E2E — bring up the Docker stack, install Playwright, run, tear down.
-# Tear-down runs even on failure so the port is freed.
-e2e:
-	@root="$$PWD"; \
-	docker compose -f "$$root/docker-compose.e2e.yml" up --build -d; \
-	trap 'docker compose -f "'$$root'/docker-compose.e2e.yml" down -v' EXIT; \
-	cd e2e && \
-	  (test -f package-lock.json && npm ci || npm install --no-audit --no-fund) && \
-	  npx playwright install --with-deps chromium && \
-	  npx playwright test
-
-e2e-up:
-	docker compose -f docker-compose.e2e.yml up --build -d
-
-e2e-down:
-	docker compose -f docker-compose.e2e.yml down -v
+# E2E — testcontainers boots Postgres + Mailpit, app runs in-process.
+# Requires Docker + Playwright Chromium driver
+# (run once: `go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium`).
+test-e2e:
+	go test -tags=e2e -timeout=5m -count=1 ./e2e/...
 
 # All three suites, in order.
-test: unit integration e2e
+test: test-unit test-integration test-e2e

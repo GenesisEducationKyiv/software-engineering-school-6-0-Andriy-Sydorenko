@@ -1,98 +1,69 @@
 package config
 
 import (
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetEnvOrDefault(t *testing.T) {
 	t.Setenv("X_TEST_KEY", "")
-	if got := getEnvOrDefault("X_TEST_KEY", "fallback"); got != "fallback" {
-		t.Errorf("empty env: got %q, want fallback", got)
-	}
+	assert.Equal(t, "fallback", getEnvOrDefault("X_TEST_KEY", "fallback"))
+
 	t.Setenv("X_TEST_KEY", "explicit")
-	if got := getEnvOrDefault("X_TEST_KEY", "fallback"); got != "explicit" {
-		t.Errorf("set env: got %q, want explicit", got)
-	}
+	assert.Equal(t, "explicit", getEnvOrDefault("X_TEST_KEY", "fallback"))
 }
 
 func TestGetEnvDuration(t *testing.T) {
 	t.Setenv("X_DUR", "")
-	if got := getEnvDuration("X_DUR", 5*time.Second); got != 5*time.Second {
-		t.Errorf("fallback: got %v", got)
-	}
+	assert.Equal(t, 5*time.Second, getEnvDuration("X_DUR", 5*time.Second))
+
 	t.Setenv("X_DUR", "2m30s")
-	if got := getEnvDuration("X_DUR", time.Second); got != 2*time.Minute+30*time.Second {
-		t.Errorf("parsed: got %v", got)
-	}
+	assert.Equal(t, 2*time.Minute+30*time.Second, getEnvDuration("X_DUR", time.Second))
 }
 
 func TestGetEnvDurationPanicsOnInvalid(t *testing.T) {
 	t.Setenv("X_DUR_BAD", "not-a-duration")
+
+	// Panic must mention the env key — operator's only signal to find the typo.
 	defer func() {
 		r := recover()
-		if r == nil {
-			t.Fatal("expected panic on malformed duration")
-		}
-		if !strings.Contains(r.(string), "X_DUR_BAD") {
-			t.Errorf("panic should mention env key, got %v", r)
-		}
+		require.NotNil(t, r, "expected panic on malformed duration")
+		assert.Contains(t, r.(string), "X_DUR_BAD")
 	}()
 	_ = getEnvDuration("X_DUR_BAD", time.Second)
 }
 
-func TestGetEnvInt(t *testing.T) {
+func TestGetEnvIntFallbackAndParse(t *testing.T) {
 	t.Setenv("X_INT", "")
-	if got := getEnvInt("X_INT", 42); got != 42 {
-		t.Errorf("fallback: got %d", got)
-	}
+	assert.Equal(t, 42, getEnvInt("X_INT", 42))
+
 	t.Setenv("X_INT", "17")
-	if got := getEnvInt("X_INT", 1); got != 17 {
-		t.Errorf("parsed: got %d", got)
-	}
+	assert.Equal(t, 17, getEnvInt("X_INT", 1))
 }
 
 func TestGetEnvIntPanicsOnInvalid(t *testing.T) {
 	t.Setenv("X_INT_BAD", "abc")
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic on malformed int")
-		}
-	}()
-	_ = getEnvInt("X_INT_BAD", 1)
+	assert.Panics(t, func() { _ = getEnvInt("X_INT_BAD", 1) })
 }
 
 func TestLoadScannerConfigDefaults(t *testing.T) {
 	t.Setenv("SCAN_INTERVAL", "")
 	t.Setenv("SCAN_CONCURRENCY", "")
 	cfg := loadScannerConfig()
-	if cfg.Interval != 5*time.Minute {
-		t.Errorf("Interval default: %v", cfg.Interval)
-	}
-	if cfg.Concurrency != 8 {
-		t.Errorf("Concurrency default: %d", cfg.Concurrency)
-	}
+	assert.Equal(t, 5*time.Minute, cfg.Interval)
+	assert.Equal(t, 8, cfg.Concurrency)
 }
 
-func TestLoadScannerConfigPanicsOnZeroConcurrency(t *testing.T) {
-	t.Setenv("SCAN_CONCURRENCY", "0")
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic when SCAN_CONCURRENCY < 1")
-		}
-	}()
-	_ = loadScannerConfig()
-}
-
-func TestLoadScannerConfigPanicsOnNegativeConcurrency(t *testing.T) {
-	t.Setenv("SCAN_CONCURRENCY", "-3")
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic when SCAN_CONCURRENCY < 1")
-		}
-	}()
-	_ = loadScannerConfig()
+func TestLoadScannerConfigPanicsOnNonPositiveConcurrency(t *testing.T) {
+	for _, val := range []string{"0", "-3"} {
+		t.Run(val, func(t *testing.T) {
+			t.Setenv("SCAN_CONCURRENCY", val)
+			assert.Panics(t, func() { _ = loadScannerConfig() })
+		})
+	}
 }
 
 func TestValidate(t *testing.T) {
@@ -101,41 +72,19 @@ func TestValidate(t *testing.T) {
 		mutate  func(c *Config)
 		wantErr string
 	}{
-		{
-			name:   "ok with DATABASE_URL",
-			mutate: func(c *Config) {},
-		},
-		{
-			name: "ok with discrete DB fields",
-			mutate: func(c *Config) {
-				c.DB.URL = ""
-				c.DB.User = "u"
-				c.DB.Name = "db"
-			},
-		},
-		{
-			name: "missing DB",
-			mutate: func(c *Config) {
-				c.DB.URL = ""
-				c.DB.User = ""
-				c.DB.Name = ""
-			},
-			wantErr: "DATABASE_URL",
-		},
-		{
-			name: "missing SMTP host",
-			mutate: func(c *Config) {
-				c.SMTP.Host = ""
-			},
-			wantErr: "SMTP_HOST",
-		},
-		{
-			name: "missing SMTP username",
-			mutate: func(c *Config) {
-				c.SMTP.Username = ""
-			},
-			wantErr: "SMTP_HOST",
-		},
+		{"ok with DATABASE_URL", func(c *Config) {}, ""},
+		{"ok with discrete DB fields", func(c *Config) {
+			c.DB.URL = ""
+			c.DB.User = "u"
+			c.DB.Name = "db"
+		}, ""},
+		{"missing DB", func(c *Config) {
+			c.DB.URL = ""
+			c.DB.User = ""
+			c.DB.Name = ""
+		}, "DATABASE_URL"},
+		{"missing SMTP host", func(c *Config) { c.SMTP.Host = "" }, "SMTP_HOST"},
+		{"missing SMTP username", func(c *Config) { c.SMTP.Username = "" }, "SMTP_HOST"},
 	}
 
 	for _, tc := range tests {
@@ -144,17 +93,11 @@ func TestValidate(t *testing.T) {
 			tc.mutate(c)
 			err := c.validate()
 			if tc.wantErr == "" {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
+				assert.NoError(t, err)
 				return
 			}
-			if err == nil {
-				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
-			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("error = %v, want substring %q", err, tc.wantErr)
-			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
 }

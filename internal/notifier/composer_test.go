@@ -3,6 +3,9 @@ package notifier
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const testBaseURL = "https://notify.example.com"
@@ -11,43 +14,24 @@ func TestComposerConfirmation(t *testing.T) {
 	c := NewComposer(testBaseURL)
 
 	msg, err := c.Confirmation("user@example.com", "golang/go", "ctoken", "utoken")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
 
-	if msg.To != "user@example.com" {
-		t.Errorf("To = %q, want user@example.com", msg.To)
-	}
-	if !strings.Contains(msg.Subject, "golang/go") {
-		t.Errorf("Subject should mention repo, got %q", msg.Subject)
-	}
+	assert.Equal(t, "user@example.com", msg.To)
+	assert.Contains(t, msg.Subject, "golang/go")
 
 	confirmURL := testBaseURL + "/api/confirm/ctoken"
 	unsubURL := testBaseURL + "/api/unsubscribe/utoken"
 
-	if !strings.Contains(msg.PlainBody, confirmURL) {
-		t.Errorf("PlainBody missing confirm URL: %q", msg.PlainBody)
-	}
-	if !strings.Contains(msg.PlainBody, unsubURL) {
-		t.Errorf("PlainBody missing unsubscribe URL: %q", msg.PlainBody)
-	}
-	if !strings.Contains(msg.PlainBody, "golang/go") {
-		t.Errorf("PlainBody missing repo")
-	}
+	assert.Contains(t, msg.PlainBody, confirmURL)
+	assert.Contains(t, msg.PlainBody, unsubURL)
+	assert.Contains(t, msg.PlainBody, "golang/go")
 
-	if msg.HTMLBody == "" {
-		t.Fatal("HTMLBody should be rendered")
-	}
-	if !strings.Contains(msg.HTMLBody, confirmURL) {
-		t.Errorf("HTMLBody missing confirm URL (href)")
-	}
+	require.NotEmpty(t, msg.HTMLBody)
+	assert.Contains(t, msg.HTMLBody, confirmURL)
 
-	// The display variant must include the ZWSP-broken URL so mail
-	// clients don't auto-linkify the "copy this link" text.
+	// ZWSP-broken URL: prevents mail clients from auto-linkifying the "copy this link" text.
 	wantDisplay := strings.Replace(confirmURL, "://", zwsp+"://", 1)
-	if !strings.Contains(msg.HTMLBody, wantDisplay) {
-		t.Errorf("HTMLBody should contain ZWSP-broken display URL")
-	}
+	assert.Contains(t, msg.HTMLBody, wantDisplay)
 
 	assertUnsubHeaders(t, msg.Headers, unsubURL)
 }
@@ -56,21 +40,14 @@ func TestComposerRelease(t *testing.T) {
 	c := NewComposer(testBaseURL)
 
 	msg, err := c.Release("user@example.com", "golang/go", "v1.24.0", "utoken")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
 
-	if !strings.Contains(msg.Subject, "v1.24.0") || !strings.Contains(msg.Subject, "golang/go") {
-		t.Errorf("Subject = %q, missing tag or repo", msg.Subject)
-	}
+	assert.Contains(t, msg.Subject, "v1.24.0")
+	assert.Contains(t, msg.Subject, "golang/go")
 
 	releaseURL := "https://github.com/golang/go/releases/tag/v1.24.0"
-	if !strings.Contains(msg.PlainBody, releaseURL) {
-		t.Errorf("PlainBody missing release URL: %q", msg.PlainBody)
-	}
-	if !strings.Contains(msg.HTMLBody, releaseURL) {
-		t.Errorf("HTMLBody missing release URL")
-	}
+	assert.Contains(t, msg.PlainBody, releaseURL)
+	assert.Contains(t, msg.HTMLBody, releaseURL)
 
 	assertUnsubHeaders(t, msg.Headers, testBaseURL+"/api/unsubscribe/utoken")
 }
@@ -82,24 +59,15 @@ func TestBreakAutoLink(t *testing.T) {
 	}{
 		{"https://example.com/path", "https" + zwsp + "://example.com/path"},
 		{"http://x.y", "http" + zwsp + "://x.y"},
-		// Only the first occurrence is broken — there is exactly one
-		// scheme separator per URL we generate.
 		{"no-scheme.example.com", "no-scheme.example.com"},
 	}
 	for _, tc := range cases {
-		got := breakAutoLink(tc.in)
-		if got != tc.want {
-			t.Errorf("breakAutoLink(%q) = %q, want %q", tc.in, got, tc.want)
-		}
+		assert.Equal(t, tc.want, breakAutoLink(tc.in))
 	}
 }
 
 func assertUnsubHeaders(t *testing.T, h map[string]string, unsubURL string) {
 	t.Helper()
-	if got := h["List-Unsubscribe"]; got != "<"+unsubURL+">" {
-		t.Errorf("List-Unsubscribe = %q, want <%s>", got, unsubURL)
-	}
-	if got := h["List-Unsubscribe-Post"]; got != "List-Unsubscribe=One-Click" {
-		t.Errorf("List-Unsubscribe-Post = %q", got)
-	}
+	assert.Equal(t, "<"+unsubURL+">", h["List-Unsubscribe"])
+	assert.Equal(t, "List-Unsubscribe=One-Click", h["List-Unsubscribe-Post"])
 }

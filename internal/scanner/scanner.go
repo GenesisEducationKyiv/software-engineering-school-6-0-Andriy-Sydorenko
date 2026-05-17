@@ -1,3 +1,5 @@
+//go:generate go tool mockgen -source=scanner.go -destination=mocks/scanner_mocks.go -package=mocks
+
 package scanner
 
 import (

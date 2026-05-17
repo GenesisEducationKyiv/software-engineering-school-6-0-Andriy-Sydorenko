@@ -6,24 +6,25 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWorkerPoolRunsAllJobs(t *testing.T) {
 	pool := NewWorkerPool(4)
 	jobs := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
 
-	var seenMu sync.Mutex
+	var mu sync.Mutex
 	seen := map[string]bool{}
 
 	pool.Run(context.Background(), jobs, func(_ context.Context, job string) {
-		seenMu.Lock()
+		mu.Lock()
 		seen[job] = true
-		seenMu.Unlock()
+		mu.Unlock()
 	})
 
-	if len(seen) != len(jobs) {
-		t.Fatalf("ran %d jobs, want %d", len(seen), len(jobs))
-	}
+	assert.Len(t, seen, len(jobs))
 }
 
 func TestWorkerPoolRespectsConcurrencyCap(t *testing.T) {
@@ -45,9 +46,7 @@ func TestWorkerPoolRespectsConcurrencyCap(t *testing.T) {
 		inFlight.Add(-1)
 	})
 
-	if got := peak.Load(); got > size {
-		t.Fatalf("observed %d concurrent handlers, cap was %d", got, size)
-	}
+	assert.LessOrEqual(t, peak.Load(), int32(size))
 }
 
 func TestWorkerPoolStopsDispatchOnContextCancel(t *testing.T) {
@@ -70,21 +69,17 @@ func TestWorkerPoolStopsDispatchOnContextCancel(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	})
 
-	if int(ran.Load()) == len(jobs) {
-		t.Fatalf("expected dispatch to stop on ctx cancel; ran all %d jobs", len(jobs))
-	}
+	assert.Less(t, int(ran.Load()), len(jobs), "dispatch should stop on ctx cancel")
 }
 
 func TestWorkerPoolEmptyJobsIsNoOp(t *testing.T) {
 	pool := NewWorkerPool(4)
 	pool.Run(context.Background(), nil, func(_ context.Context, _ string) {
-		t.Fatal("handler must not be called for empty job list")
+		require.Fail(t, "handler must not be called for empty job list")
 	})
 }
 
 func TestWorkerPoolSizeBelowOneClampedToOne(t *testing.T) {
 	pool := NewWorkerPool(0)
-	if pool.size != 1 {
-		t.Fatalf("size=%d, want 1 (clamped)", pool.size)
-	}
+	assert.Equal(t, 1, pool.size)
 }

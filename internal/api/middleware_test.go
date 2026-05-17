@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 )
 
 func newAuthedRouter(apiKey string) *gin.Engine {
@@ -41,9 +42,7 @@ func TestAPIKeyAuth(t *testing.T) {
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
 
-			if w.Code != tc.wantStatus {
-				t.Fatalf("status=%d, want %d, body=%s", w.Code, tc.wantStatus, w.Body.String())
-			}
+			assert.Equal(t, tc.wantStatus, w.Code)
 		})
 	}
 }

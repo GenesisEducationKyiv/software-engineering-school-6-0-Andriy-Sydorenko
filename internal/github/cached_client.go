@@ -1,3 +1,5 @@
+//go:generate go tool mockgen -source=cached_client.go -destination=mocks/github_mocks.go -package=mocks
+
 package github
 
 import (

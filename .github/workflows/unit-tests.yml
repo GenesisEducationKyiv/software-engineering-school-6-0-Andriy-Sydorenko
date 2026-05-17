@@ -13,6 +13,7 @@ jobs:
   unit:
     name: go test ./...
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -22,7 +23,4 @@ jobs:
       - name: Download modules
         run: go mod download
       - name: Run unit tests
-        # Integration tests are gated behind the `integration` build tag
-        # and run in integration-tests.yml. -race detects data races,
-        # -count=1 disables the test cache so flakes can't hide.
         run: go test ./... -race -count=1

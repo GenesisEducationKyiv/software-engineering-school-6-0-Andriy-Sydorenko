@@ -1,3 +1,5 @@
+//go:generate go tool mockgen -source=handler.go -destination=mocks/api_mocks.go -package=mocks
+
 package api
 
 import (

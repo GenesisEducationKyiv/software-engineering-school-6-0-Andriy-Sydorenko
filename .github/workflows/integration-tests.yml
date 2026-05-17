@@ -13,6 +13,7 @@ jobs:
   integration:
     name: testcontainers + Postgres
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -22,7 +23,4 @@ jobs:
       - name: Download modules
         run: go mod download
       - name: Run integration tests
-        # Docker is preinstalled on ubuntu-latest runners; testcontainers
-        # boots a real Postgres for each package run. The `integration`
-        # tag isolates these from the unit pipeline.
-        run: go test -tags=integration -timeout=5m -count=1 ./internal/integration/...
+        run: go test -tags=integration -timeout=2m -count=1 ./internal/integration/...

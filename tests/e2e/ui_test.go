@@ -16,53 +16,61 @@ import (
 	"github.com/playwright-community/playwright-go"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/e2e/harness"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/tests/e2e/harness"
 )
 
-// pw + browser are owned by TestMain so all UI suites share one Chromium
-// process. Per-test isolation comes from a fresh BrowserContext + Page.
 var (
-	pw      *playwright.Playwright
-	browser playwright.Browser
-	expect  playwright.PlaywrightAssertions
+	pw     *playwright.Playwright
+	expect playwright.PlaywrightAssertions
 )
 
 func TestMain(m *testing.M) {
+	// Fetch the Node driver on first run; Chromium runs in the sidecar.
+	if err := playwright.Install(&playwright.RunOptions{
+		SkipInstallBrowsers: true,
+	}); err != nil {
+		log.Fatalf("playwright install: %v", err)
+	}
 	var err error
 	pw, err = playwright.Run()
 	if err != nil {
 		log.Fatalf("playwright run: %v", err)
 	}
-	browser, err = pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(true),
-	})
-	if err != nil {
-		log.Fatalf("chromium launch: %v", err)
-	}
 	expect = playwright.NewPlaywrightAssertions(5000)
 
 	code := m.Run()
 
-	_ = browser.Close()
 	_ = pw.Stop()
 	os.Exit(code)
 }
 
 type SubscribeSuite struct {
 	harness.BaseSuite
+	browser playwright.Browser
 }
 
 func TestSubscribe(t *testing.T) {
 	suite.Run(t, new(SubscribeSuite))
 }
 
-// page opens a fresh browser context + page bound to the harness BaseURL.
-// Cleanup is wired to the test, not the suite, so per-test isolation holds.
+func (s *SubscribeSuite) SetupSuite() {
+	s.BaseSuite.SetupSuite()
+	br, err := pw.Chromium.ConnectOverCDP(s.H.BrowserWSURL)
+	s.Require().NoError(err, "connect to sidecar chromium")
+	s.browser = br
+}
+
+func (s *SubscribeSuite) TearDownSuite() {
+	if s.browser != nil {
+		_ = s.browser.Close()
+	}
+}
+
 func (s *SubscribeSuite) page() playwright.Page {
 	t := s.T()
 	t.Helper()
-	ctx, err := browser.NewContext(playwright.BrowserNewContextOptions{
-		BaseURL: playwright.String(s.H.BaseURL),
+	ctx, err := s.browser.NewContext(playwright.BrowserNewContextOptions{
+		BaseURL: playwright.String(s.H.BrowserBaseURL),
 	})
 	s.Require().NoError(err)
 	t.Cleanup(func() { _ = ctx.Close() })

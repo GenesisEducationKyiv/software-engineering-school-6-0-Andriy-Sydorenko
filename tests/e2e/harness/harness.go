@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"testing"
@@ -33,7 +34,7 @@ const (
 	// middleware actually enforced (Options.APIKey). Default is empty, which
 	// makes the middleware bypass — matches the unprotected dev/staging path.
 	DefaultAPIKey     = "test-key"
-	pgImage           = "postgres:17-alpine"
+	pgImage           = "postgres:16-alpine"
 	mailpitImage      = "axllent/mailpit:v1.20"
 	containerStartTTL = 90 * time.Second
 )
@@ -41,15 +42,18 @@ const (
 // Harness holds the live app + its dependencies and exposes the URLs tests
 // need. All cleanup is registered via t.Cleanup.
 type Harness struct {
-	BaseURL    string // app under test
-	MailpitURL string // Mailpit HTTP API root (http://host:port)
-	APIKey     string
-	DB         *gorm.DB
-	GitHub     *GitHubFixture // nil when Options.GHValidator overrides it
+	BaseURL        string // app under test, reachable from the host (127.0.0.1)
+	BrowserBaseURL string // same app, reachable from inside the browser container
+	BrowserWSURL   string // CDP websocket endpoint for ConnectOverCDP
+	MailpitURL     string // Mailpit HTTP API root (http://host:port)
+	APIKey         string
+	DB             *gorm.DB
+	GitHub         *GitHubFixture // nil when Options.GHValidator overrides it
 
-	pgC   testcontainers.Container
-	mailC testcontainers.Container
-	srv   *http.Server
+	pgC      testcontainers.Container
+	mailC    testcontainers.Container
+	browserC testcontainers.Container
+	srv      *http.Server
 }
 
 // Options configures optional substitutions. Zero value = sensible defaults
@@ -84,9 +88,16 @@ func New(t *testing.T, opts ...Options) *Harness {
 	require.NoError(t, err)
 	require.NoError(t, database.Migrate(db))
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Bind to 0.0.0.0 so the sidecar browser container can reach back
+	// via host.testcontainers.internal. Host-side code still uses
+	// 127.0.0.1:<port> through BaseURL.
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
 	require.NoError(t, err)
-	baseURL := "http://" + listener.Addr().String()
+	appPort := listener.Addr().(*net.TCPAddr).Port
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", appPort)
+	browserBaseURL := fmt.Sprintf("http://host.testcontainers.internal:%d", appPort)
+
+	browserC, wsURL := startBrowser(t, ctx, appPort)
 
 	o := Options{}
 	if len(opts) > 0 {
@@ -96,20 +107,24 @@ func New(t *testing.T, opts ...Options) *Harness {
 	gh := o.GHValidator
 	if gh == nil {
 		ghFix = newGitHubFixture()
-		gh = githubclient.NewClient(&githubclient.Config{
-			Timeout: 10 * time.Second,
-			BaseURL: ghFix.URL(),
-		})
+		gh = githubclient.NewClient(
+			&githubclient.Config{
+				Timeout: 10 * time.Second,
+				BaseURL: ghFix.URL(),
+			},
+		)
 	}
 
 	repo := repository.New(db)
-	note := notifier.New(&notifier.Config{
-		Host:     smtpAddr.host,
-		Port:     smtpAddr.port,
-		Username: "harness@example.com",
-		Password: "harness",
-		BaseURL:  baseURL,
-	})
+	note := notifier.New(
+		&notifier.Config{
+			Host:     smtpAddr.host,
+			Port:     smtpAddr.port,
+			Username: "harness@example.com",
+			Password: "harness",
+			BaseURL:  baseURL,
+		},
+	)
 	svc := service.New(repo, gh, note, service.RandomToken)
 	router := api.NewRouter(api.NewHandler(svc), o.APIKey)
 
@@ -118,22 +133,28 @@ func New(t *testing.T, opts ...Options) *Harness {
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	go func() {
+		// log.Printf, not t.Logf: this goroutine can outlive the test (nothing
+		// joins it on shutdown), and t.Logf after the test finishes panics.
 		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Logf("harness http server: %v", err)
+			log.Printf("harness http server: %v", err)
 		}
 	}()
 
 	h := &Harness{
-		BaseURL:    baseURL,
-		MailpitURL: mailpitURL,
-		APIKey:     o.APIKey,
-		DB:         db,
-		GitHub:     ghFix,
-		pgC:        pgC,
-		mailC:      mailC,
-		srv:        srv,
+		BaseURL:        baseURL,
+		BrowserBaseURL: browserBaseURL,
+		BrowserWSURL:   wsURL,
+		MailpitURL:     mailpitURL,
+		APIKey:         o.APIKey,
+		DB:             db,
+		GitHub:         ghFix,
+		pgC:            pgC,
+		mailC:          mailC,
+		browserC:       browserC,
+		srv:            srv,
 	}
 	waitForHealth(t, h.BaseURL)
 	t.Cleanup(h.shutdown)
@@ -166,6 +187,9 @@ func (h *Harness) shutdown() {
 	}
 	_ = h.pgC.Terminate(shutdownCtx)
 	_ = h.mailC.Terminate(shutdownCtx)
+	if h.browserC != nil {
+		_ = h.browserC.Terminate(shutdownCtx)
+	}
 }
 
 type smtpAddr struct {
@@ -175,7 +199,8 @@ type smtpAddr struct {
 
 func startPostgres(t *testing.T, ctx context.Context) *postgres.PostgresContainer {
 	t.Helper()
-	c, err := postgres.Run(ctx, pgImage,
+	c, err := postgres.Run(
+		ctx, pgImage,
 		postgres.WithDatabase("e2e"),
 		postgres.WithUsername("e2e"),
 		postgres.WithPassword("e2e"),
@@ -202,10 +227,12 @@ func startMailpit(t *testing.T, ctx context.Context) (testcontainers.Container, 
 		},
 		WaitingFor: wait.ForHTTP("/api/v1/info").WithPort("8025/tcp").WithStartupTimeout(30 * time.Second),
 	}
-	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
+	c, err := testcontainers.GenericContainer(
+		ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: req,
+			Started:          true,
+		},
+	)
 	require.NoError(t, err)
 
 	host, err := c.Host(ctx)
@@ -215,7 +242,11 @@ func startMailpit(t *testing.T, ctx context.Context) (testcontainers.Container, 
 	httpPort, err := c.MappedPort(ctx, "8025")
 	require.NoError(t, err)
 
-	return c, smtpAddr{host: host, port: smtp.Port()}, fmt.Sprintf("http://%s:%s", host, httpPort.Port())
+	return c, smtpAddr{host: host, port: smtp.Port()}, fmt.Sprintf(
+		"http://%s:%s",
+		host,
+		httpPort.Port(),
+	)
 }
 
 func waitForHealth(t *testing.T, baseURL string) {

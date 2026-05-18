@@ -7,8 +7,8 @@ and the mail → URL → DB token round-trip** — if a regression breaks
 that loop, no other suite catches it.
 
 If you want the cross-layer philosophy, read
-[ADR-008](docs/adr/008-testing-strategy.md). For commands and
-prerequisites, [`testing.md`](testing.md).
+[ADR-008](../adr/008-testing-strategy.md). For commands and
+prerequisites, [`README.md`](README.md).
 
 ## What this layer proves
 
@@ -75,11 +75,11 @@ failure surfaces.
 - **`TestNetworkFailure`** — `page.Route` aborts the request before
   the server sees it. The JS error handler must show a useful
   message; a regression that silently swallows the error fails this.
-- **`TestLifecycle`** — the headline test. POST → poll Mailpit for
+- **`TestLifecycle`** — the full round-trip. POST → poll Mailpit for
   the real email → extract confirm token from the body → `GET
   /api/confirm/:t` → `GET /api/unsubscribe/:t` → re-use the
-  unsubscribe token (must fail, proving one-shot). This is the test
-  that justifies the harness existing.
+  unsubscribe token (must fail, proving one-shot). This is the case
+  the harness exists to make possible — no cheaper layer can run it.
 - **`TestSubscribe_RateLimited`** — GitHub fixture returns 429 with
   rate-limit headers; the real `github.Client` recognises it; the
   service maps to `ErrRateLimited`; the handler returns the right
@@ -129,8 +129,10 @@ public API:
 
 | Field / method | Purpose |
 |---|---|
-| `New(t, opts...)` | Boots Postgres + Mailpit + GH fixture + app, returns `*Harness`. Cleanup wired to `t.Cleanup`. |
-| `BaseURL` | App URL (`http://127.0.0.1:<port>`) |
+| `New(t, opts...)` | Boots Postgres + Mailpit + Chromium + GH fixture + app, returns `*Harness`. Cleanup wired to `t.Cleanup`. |
+| `BaseURL` | App URL on the host (`http://127.0.0.1:<port>`) |
+| `BrowserBaseURL` | Same app, addressable from inside the browser container (`http://host.testcontainers.internal:<port>`) |
+| `BrowserWSURL` | CDP websocket endpoint for `playwright.Chromium.ConnectOverCDP` |
 | `MailpitURL` | Mailpit HTTP API root |
 | `APIKey` | Mirrors `Options.APIKey` (empty = middleware bypass) |
 | `DB` | `*gorm.DB` for direct row inspection |
@@ -150,13 +152,14 @@ public API:
 ## Layout
 
 ```
-e2e/
+tests/e2e/
   ui_test.go               SubscribeSuite + TestMain + shared helpers
   lifecycle_test.go        SubscribeSuite: TestLifecycle
   github_failures_test.go  SubscribeSuite: rate-limited, server-error
   auth_test.go             AuthSuite (separate harness, APIKey enforced)
   harness/                 testcontainers + in-process app + fixtures
     harness.go             New(t, opts), shutdown, helpers
+    browser.go             Chromium sidecar + CDP ws discovery
     suite.go               BaseSuite (testify) — owns one Harness
     github_fixture.go      httptest.Server with per-owner behavior map
     mailpit.go             WaitForMail — polls + extracts tokens
@@ -165,11 +168,13 @@ e2e/
 
 ## Stack
 
-- **Browser driver**: `playwright-community/playwright-go` (Chromium
-  headless). Chromium reused across suites via `TestMain`; per-test
-  isolation is a fresh `BrowserContext`.
-- **Container lifecycle**: `testcontainers-go` — Postgres 17 module
-  + Mailpit via generic container.
+- **Browser driver**: `playwright-community/playwright-go` connecting
+  via CDP to a per-harness `chromedp/headless-shell` sidecar
+  container. The playwright Node driver subprocess is shared across
+  suites via `TestMain`; per-test isolation is a fresh
+  `BrowserContext`.
+- **Container lifecycle**: `testcontainers-go` — Postgres 16 module
+  (`postgres:16-alpine`) + Mailpit via generic container.
 - **Suite framework**: `testify/suite` — `harness.BaseSuite` owns
   one Harness per suite.
 - **Assertions**: `testify/require` for setup hard-fail;
@@ -180,18 +185,50 @@ e2e/
 
 ```
 make test-e2e
-# go test -tags=e2e -timeout=5m -count=1 ./e2e/...
+# go test -tags=e2e -timeout=5m -count=1 ./tests/e2e/...
 ```
 
-Requires Docker (testcontainers boots Postgres 17 + Mailpit) and the
-Playwright Chromium driver. **One-time install:**
+Requires only Docker. testcontainers boots Postgres 16, Mailpit, and a
+Chromium sidecar (`chromedp/headless-shell:stable`, ~360 MB);
+`playwright-go` connects to it via `Chromium.ConnectOverCDP(wsURL)`.
+The browser dials back to the in-process app through
+`host.testcontainers.internal:<port>`, provisioned by testcontainers'
+`HostAccessPorts`.
 
-```
-go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
-```
+`TestMain` calls `playwright.Install(SkipInstallBrowsers: true)`
+before `playwright.Run()` — first invocation fetches the ~50 MB
+Node driver into `~/.cache/ms-playwright-go`, subsequent runs no-op.
+No manual CLI step locally or in CI.
 
-**Wall time ≈ 10–11 s** (two harness instances → two container sets;
-Chromium reused via `TestMain`).
+### Trade-offs of this wiring
+
+**Pros**
+- Host prereqs are `git + docker + go`. No `playwright install` step
+  in the Makefile, README, or CI.
+- No Chromium binary on the user's home directory; no apt packages.
+  Browser bytes live in Docker's image cache, image tag pinned in
+  `tests/e2e/harness/browser.go`.
+- `playwright.Install` is idempotent and silent on cache-hit, so the
+  developer UX is identical to `go mod download`.
+
+**Cons**
+- The playwright-go Node driver still lives on the host (~50 MB).
+  "Zero host install" is *almost* but not *literally* true — keeping
+  the playwright API means keeping the driver.
+- First `make test-e2e` is slower by one driver fetch + one image
+  pull. Both cache, so it's strictly one-time.
+- The Chromium sidecar adds one more container per harness to start,
+  on top of Postgres and Mailpit.
+- Runtime dependency on the playwright-go CDN being reachable on
+  first run (mirrors the `go mod` dependency on `proxy.golang.org`).
+
+Eliminating the driver would require swapping `playwright-go` for a
+pure-Go CDP client (`chromedp` or `go-rod`) and rewriting every
+`SubscribeSuite` test. Out of scope here.
+
+Wall time is dominated by container startup — three containers per
+harness, two harness instances (images cached by Docker after first
+pull). Rough local figure, not benchmarked.
 
 Gated behind `//go:build e2e` so the default `go test ./...` unit
 run stays container-free and browser-free.
@@ -270,7 +307,7 @@ Skip:
 
 ## CI
 
-`.github/workflows/e2e-tests.yml`: `setup-go` → cached Playwright
-Chromium driver (cache key on `go.sum`) → `go test -tags=e2e
--timeout=10m -count=1 ./e2e/...`. testcontainers pulls Postgres +
-Mailpit at runtime on the ubuntu-latest Docker daemon.
+`.github/workflows/e2e-tests.yml`: `setup-go` → `go mod download` →
+`go test -tags=e2e -timeout=10m -count=1 ./tests/e2e/...`. testcontainers
+pulls Postgres, Mailpit, and `chromedp/headless-shell` at runtime on
+the ubuntu-latest Docker daemon.

@@ -6,8 +6,8 @@ service **handed off**, not what the outside world received (that's the
 e2e suite's job).
 
 If you want the cross-layer philosophy, read
-[ADR-008](docs/adr/008-testing-strategy.md). For commands and
-prerequisites, [`testing.md`](testing.md).
+[ADR-008](../adr/008-testing-strategy.md). For commands and
+prerequisites, [`README.md`](README.md).
 
 ## What this layer proves
 
@@ -45,8 +45,8 @@ where the assertions live. The interesting cases:
   and the error codes are distinguished (401 vs 403 matters for
   client retry logic).
 - **Invalid repo format → 400 *without GitHub being called*** —
-  cheap-input rejection happens before the upstream call (any
-  regression here doubles the GitHub rate-limit consumption).
+  cheap-input rejection happens before the upstream call (a regression
+  here spends an extra GitHub call on every malformed request).
 - **Malformed JSON → 400** — gin's bind errors are mapped, not
   surfaced as 500s.
 - **Duplicate → 409, no second mailer call** — idempotency at the
@@ -107,8 +107,9 @@ which builds the whole graph fresh.
 
 ## Stack
 
-- `testcontainers-go` boots `postgres:17-alpine` **once per package
-  run** (shared via `TestMain` for cheap startup).
+- `testcontainers-go` boots `postgres:16-alpine` (matches prod and the
+  e2e suite) **once per package run** (shared via `TestMain` for cheap
+  startup).
 - `testify/suite` would be overkill for two files; tests are plain
   `func Test*(t *testing.T)` with table-driven cases.
 - `testify/require` for hard fail in setup; raw `t.Errorf` for soft
@@ -118,13 +119,14 @@ which builds the whole graph fresh.
 
 ```
 make test-integration
-# go test -tags=integration -timeout=2m -count=1 ./internal/integration/...
+# go test -tags=integration -timeout=2m -count=1 ./tests/integration/...
 ```
 
 Requires Docker. Postgres is started once per package via
 testcontainers-go and reused; rows are wiped between tests with
-`TRUNCATE ... RESTART IDENTITY CASCADE`. **Wall time ≈ 5 s, test
-time ≈ 3 s.**
+`TRUNCATE ... RESTART IDENTITY CASCADE`. Wall time is dominated by
+container startup, not the tests themselves (rough local figure, not
+benchmarked).
 
 Gated behind `//go:build integration` so the default `go test ./...`
 unit run stays container-free.

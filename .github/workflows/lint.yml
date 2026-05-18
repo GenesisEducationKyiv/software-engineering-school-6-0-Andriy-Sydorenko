@@ -24,7 +24,7 @@ jobs:
         with:
           version: v2.11.4
 
-      # Fails if `make generate` would change committed mocks — i.e. someone
-      # edited an interface or added a gen.go line without regenerating.
+      # Fails if `make generate-mocks` would change committed mocks — i.e. someone
+      # edited an interface or added a codegen directive without regenerating.
       - name: Verify generated mocks are up to date
-        run: make verify-generate
+        run: make verify-mocks

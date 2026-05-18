@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/e2e/harness"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/tests/e2e/harness"
 )
 
 // AuthSuite has its own harness configured with a non-empty API key so the
@@ -34,7 +34,8 @@ func (s *AuthSuite) TestSubscriptions_NoKey_401() {
 }
 
 func (s *AuthSuite) TestSubscriptions_WrongKey_403() {
-	req, _ := http.NewRequest(http.MethodGet, s.H.BaseURL+"/api/subscriptions", nil)
+	req, err := http.NewRequest(http.MethodGet, s.H.BaseURL+"/api/subscriptions", nil)
+	s.Require().NoError(err)
 	req.Header.Set("X-API-Key", "not-the-key")
 	resp, err := http.DefaultClient.Do(req)
 	s.Require().NoError(err)

@@ -28,9 +28,9 @@ func (s *SubscribeSuite) apiSubscribe(email, repo string) (int, string) {
 	return resp.StatusCode, string(rb)
 }
 
-// TestLifecycle exercises subscribe → confirm (via token from real email)
-// → unsubscribe (via token from same email). Proves Mailpit round-trip,
-// DB state changes, and the cross-endpoint token contract all work.
+// TestLifecycle exercises subscribe → confirm → unsubscribe, each step driven by
+// a token parsed from the real email. e2e proves state via behavior, not by
+// reading the DB — row-level asserts live in the integration tier.
 func (s *SubscribeSuite) TestLifecycle() {
 	email := fmt.Sprintf("lifecycle+%d@example.com", time.Now().UnixNano())
 	repo := "golang/go"
@@ -52,7 +52,7 @@ func (s *SubscribeSuite) TestLifecycle() {
 	unsubResp.Body.Close()
 	s.Require().Equal(http.StatusOK, unsubResp.StatusCode)
 
-	// Token can no longer be used a second time — proves DB state changed.
+	// Token is now one-shot — state change verified through behavior, not a DB read.
 	again, err := http.Get(s.H.BaseURL + "/api/unsubscribe/" + mail.UnsubToken)
 	s.Require().NoError(err)
 	again.Body.Close()

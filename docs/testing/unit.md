@@ -7,8 +7,8 @@ functions with non-obvious edge cases, ordering invariants that hold
 even when downstream fails.
 
 If you want the cross-layer philosophy (why three layers, why these
-boundaries), read [ADR-008](docs/adr/008-testing-strategy.md). If you
-want to run the suite, read [`testing.md`](testing.md).
+boundaries), read [ADR-008](../adr/008-testing-strategy.md). If you
+want to run the suite, read [`README.md`](README.md).
 
 ## What's tested and why
 
@@ -51,8 +51,8 @@ production — must not crash and must not double-fire.
 
 ### `internal/scanner/workerpool`
 
-Tiny standalone primitive — gets its own tests because the bug class
-(deadlock, leaked goroutines) is impossible to catch elsewhere.
+Tiny standalone primitive — gets its own tests because its bug class
+(deadlock, leaked goroutines) is hard to surface at any higher layer.
 
 - Concurrency cap, context-cancel dispatch stop, size-clamp on
   malformed inputs.
@@ -131,18 +131,18 @@ Schema mapping at the API boundary.
 - **Mocks**: `go.uber.org/mock` (uber-go/mock, gomock's maintained
   fork). Generated via `go tool mockgen` (Go 1.24+ `tool` directive in
   `go.mod`), committed to the repo. Drift is caught two ways:
-  - **CI** runs `make verify-generate` in the lint workflow; fails if
-    `make generate` would change anything.
+  - **CI** runs `make verify-mocks` in the lint workflow; fails if
+    `make generate-mocks` would change anything.
   - **Pre-commit hook** (`scripts/pre-commit`, installed via
     `make install-hooks`) runs the same check locally. Skip with
     `git commit --no-verify` when you know you're not touching mocks.
 - **Runner**: stdlib `testing`. No third-party runner.
 
-### Codegen lives in `gen.go`, not in source files
+### Codegen lives in `internal/codegen/gen.go`, not in source files
 
 Production source files carry **no** `//go:generate` metadata. All
-mockgen directives are centralized in `/gen.go`, which is gated by the
-`generate` build tag so it's invisible to normal builds.
+mockgen directives are centralized in `internal/codegen/gen.go`, which is
+gated by the `generate` build tag so it's invisible to normal builds.
 
 Generated mocks land in `internal/<pkg>/mocks/`, imported as
 `<pkg>/mocks`.
@@ -157,27 +157,28 @@ Generated mocks land in `internal/<pkg>/mocks/`, imported as
 **Adding a new mocked interface**:
 
 1. Create the interface in `internal/<pkg>/<file>.go`.
-2. Add one line to `gen.go`:
+2. Add one line to `internal/codegen/gen.go` (paths are relative to that
+   directory, since `go generate` runs each directive from the file's dir):
    ```go
-   //go:generate go tool mockgen -source=internal/<pkg>/<file>.go -destination=internal/<pkg>/mocks/<file>_mocks.go -package=mocks
+   //go:generate go tool mockgen -source=../<pkg>/<file>.go -destination=../<pkg>/mocks/<file>_mocks.go -package=mocks
    ```
-3. Run `make generate`.
+3. Run `make generate-mocks`.
 
 Forgetting any of these is caught: missing mocks fail to compile in
-unit tests; stale mocks fail `make verify-generate` in CI and in the
+unit tests; stale mocks fail `make verify-mocks` in CI and in the
 pre-commit hook.
 
 ## Running
 
 ```
 make test-unit         # ~3–4 s wall, no containers
-make generate          # regenerate mocks after editing an interface
-make verify-generate   # fail if committed mocks would change after regen
+make generate-mocks          # regenerate mocks after editing an interface
+make verify-mocks   # fail if committed mocks would change after regen
 make install-hooks     # symlink scripts/pre-commit into .git/hooks (run once)
 ```
 
-The unit job excludes `./e2e/...` (`//go:build e2e`) and
-`./internal/integration/...` (`//go:build integration`). Default
+The unit job excludes `./tests/e2e/...` (`//go:build e2e`) and
+`./tests/integration/...` (`//go:build integration`). Default
 `go test ./...` runs unit only.
 
 ## Conventions

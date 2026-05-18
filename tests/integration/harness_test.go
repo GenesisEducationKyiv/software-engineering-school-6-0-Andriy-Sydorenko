@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -165,9 +164,6 @@ func startPostgres() (*gorm.DB, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	// Container lifetime is bound to the test binary — Reaper cleans up
-	// on process exit, so no explicit Terminate.
-	_ = os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "false")
 	return db, nil
 }
 
@@ -176,9 +172,14 @@ func openWithRetry(dsn string, attempts int, delay time.Duration) (*gorm.DB, err
 	var lastErr error
 	for i := 0; i < attempts; i++ {
 		db, err := database.NewPostgres(cfg)
+		if err != nil {
+			lastErr = err
+			time.Sleep(delay)
+			continue
+		}
+		sqlDB, err := db.DB()
 		if err == nil {
-			sqlDB, _ := db.DB()
-			if err := sqlDB.Ping(); err == nil {
+			if err = sqlDB.Ping(); err == nil {
 				return db, nil
 			}
 		}

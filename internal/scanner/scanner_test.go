@@ -3,243 +3,174 @@ package scanner
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
+
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner/mocks"
 )
 
-type mockScannerRepo struct {
-	repos          []string
-	reposErr       error
-	subsByRepo     map[string][]domain.Subscription
-	subsErr        error
-	updatedTags    map[uint]string
-	updateTagErr   error
-	reposCalls     int
-	subsCalls      int
-	updateTagCalls int
+type fixture struct {
+	repo     *mocks.MockRepository
+	github   *mocks.MockReleaseFetcher
+	notifier *mocks.MockReleaseNotifier
+	scanner  *Scanner
 }
 
-func newMockScannerRepo() *mockScannerRepo {
-	return &mockScannerRepo{
-		subsByRepo:  map[string][]domain.Subscription{},
-		updatedTags: map[uint]string{},
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	f := &fixture{
+		repo:     mocks.NewMockRepository(ctrl),
+		github:   mocks.NewMockReleaseFetcher(ctrl),
+		notifier: mocks.NewMockReleaseNotifier(ctrl),
 	}
-}
-
-func (m *mockScannerRepo) FindDistinctConfirmedRepos(_ context.Context) ([]string, error) {
-	m.reposCalls++
-	return m.repos, m.reposErr
-}
-
-func (m *mockScannerRepo) FindConfirmedSubscriptionsByRepo(
-	_ context.Context,
-	repo string,
-) ([]domain.Subscription, error) {
-	m.subsCalls++
-	if m.subsErr != nil {
-		return nil, m.subsErr
-	}
-	return m.subsByRepo[repo], nil
-}
-
-func (m *mockScannerRepo) UpdateLastSeenTag(_ context.Context, id uint, tag string) error {
-	m.updateTagCalls++
-	if m.updateTagErr != nil {
-		return m.updateTagErr
-	}
-	m.updatedTags[id] = tag
-	return nil
-}
-
-type mockFetcher struct {
-	mu    sync.Mutex
-	tags  map[string]string
-	errs  map[string]error
-	calls int
-}
-
-func (m *mockFetcher) GetLatestRelease(_ context.Context, owner, repo string) (string, error) {
-	m.mu.Lock()
-	m.calls++
-	key := owner + "/" + repo
-	err := m.errs[key]
-	tag := m.tags[key]
-	m.mu.Unlock()
-	if err != nil {
-		return "", err
-	}
-	return tag, nil
-}
-
-type mockReleaseNotifier struct {
-	err  error
-	sent []sentRelease
-}
-
-type sentRelease struct {
-	email, repo, tag, unsubToken string
-}
-
-func (m *mockReleaseNotifier) SendReleaseNotification(
-	_ context.Context,
-	email, repo, tag, unsubscribeToken string,
-) error {
-	m.sent = append(m.sent, sentRelease{email, repo, tag, unsubscribeToken})
-	return m.err
-}
-
-// newScanner uses concurrency=1 for deterministic dispatch order;
-// parallelism is exercised in workerpool_test.go.
-func newScanner(
-	repo *mockScannerRepo,
-	fetcher *mockFetcher,
-	notifier *mockReleaseNotifier,
-) *Scanner {
-	return New(repo, fetcher, notifier, &Config{Interval: time.Minute, Concurrency: 1})
+	// Concurrency=1: deterministic dispatch. Parallelism: workerpool_test.go.
+	f.scanner = New(f.repo, f.github, f.notifier, &Config{Interval: time.Minute, Concurrency: 1})
+	return f
 }
 
 func TestNewReleaseNotifiesAll(t *testing.T) {
-	repo := newMockScannerRepo()
-	repo.repos = []string{"golang/go"}
-	repo.subsByRepo["golang/go"] = []domain.Subscription{
+	f := newFixture(t)
+	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
+	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
+	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return([]domain.Subscription{
 		{ID: 1, Email: "a@x.com", Repo: "golang/go", LastSeenTag: "v1.0", UnsubscribeToken: "uA"},
 		{ID: 2, Email: "b@x.com", Repo: "golang/go", LastSeenTag: "v1.0", UnsubscribeToken: "uB"},
-	}
-	fetcher := &mockFetcher{tags: map[string]string{"golang/go": "v1.1"}}
-	notifier := &mockReleaseNotifier{}
+	}, nil)
+	f.repo.EXPECT().UpdateLastSeenTag(gomock.Any(), uint(1), "v1.1").Return(nil)
+	f.repo.EXPECT().UpdateLastSeenTag(gomock.Any(), uint(2), "v1.1").Return(nil)
+	f.notifier.EXPECT().SendReleaseNotification(gomock.Any(), "a@x.com", "golang/go", "v1.1", "uA").Return(nil)
+	f.notifier.EXPECT().SendReleaseNotification(gomock.Any(), "b@x.com", "golang/go", "v1.1", "uB").Return(nil)
 
-	newScanner(repo, fetcher, notifier).runOnce(context.Background())
-
-	if len(notifier.sent) != 2 {
-		t.Fatalf("want 2 notifications, got %d", len(notifier.sent))
-	}
-	if repo.updatedTags[1] != "v1.1" || repo.updatedTags[2] != "v1.1" {
-		t.Fatalf("tags not updated: %v", repo.updatedTags)
-	}
-	if notifier.sent[0].unsubToken != "uA" {
-		t.Fatalf("unsub token missing: %+v", notifier.sent[0])
-	}
+	f.scanner.runOnce(context.Background())
 }
 
 func TestSameTagNoNotification(t *testing.T) {
-	repo := newMockScannerRepo()
-	repo.repos = []string{"golang/go"}
-	repo.subsByRepo["golang/go"] = []domain.Subscription{
+	f := newFixture(t)
+	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
+	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.0", nil)
+	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return([]domain.Subscription{
 		{ID: 1, Email: "a@x.com", Repo: "golang/go", LastSeenTag: "v1.0"},
-	}
-	fetcher := &mockFetcher{tags: map[string]string{"golang/go": "v1.0"}}
-	notifier := &mockReleaseNotifier{}
+	}, nil)
+	// No Update/Send EXPECT: tag unchanged ⇒ silent.
 
-	newScanner(repo, fetcher, notifier).runOnce(context.Background())
-
-	if len(notifier.sent) != 0 {
-		t.Fatalf("want 0 notifications, got %d", len(notifier.sent))
-	}
-	if repo.updateTagCalls != 0 {
-		t.Fatalf("want no tag updates, got %d", repo.updateTagCalls)
-	}
+	f.scanner.runOnce(context.Background())
 }
 
 func TestFirstBaselineSilent(t *testing.T) {
-	repo := newMockScannerRepo()
-	repo.repos = []string{"golang/go"}
-	repo.subsByRepo["golang/go"] = []domain.Subscription{
-		{ID: 1, Email: "a@x.com", Repo: "golang/go", LastSeenTag: ""},
-	}
-	fetcher := &mockFetcher{tags: map[string]string{"golang/go": "v1.1"}}
-	notifier := &mockReleaseNotifier{}
+	// First sighting: persist tag, skip email — otherwise every new sub gets spam for the current release.
+	f := newFixture(t)
+	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
+	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
+	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return([]domain.Subscription{
+		{ID: 1, LastSeenTag: ""},
+	}, nil)
+	f.repo.EXPECT().UpdateLastSeenTag(gomock.Any(), uint(1), "v1.1").Return(nil)
 
-	newScanner(repo, fetcher, notifier).runOnce(context.Background())
-
-	if len(notifier.sent) != 0 {
-		t.Fatalf("want silent baseline, got %d notifications", len(notifier.sent))
-	}
-	if repo.updatedTags[1] != "v1.1" {
-		t.Fatalf("baseline tag not recorded: %v", repo.updatedTags)
-	}
+	f.scanner.runOnce(context.Background())
 }
 
 func TestEmptyTagSkips(t *testing.T) {
-	repo := newMockScannerRepo()
-	repo.repos = []string{"owner/empty"}
-	repo.subsByRepo["owner/empty"] = []domain.Subscription{{ID: 1, LastSeenTag: ""}}
-	fetcher := &mockFetcher{tags: map[string]string{"owner/empty": ""}}
-	notifier := &mockReleaseNotifier{}
+	// Empty tag = "no releases yet" — must short-circuit before fetching subs.
+	f := newFixture(t)
+	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"owner/empty"}, nil)
+	f.github.EXPECT().GetLatestRelease(gomock.Any(), "owner", "empty").Return("", nil)
 
-	newScanner(repo, fetcher, notifier).runOnce(context.Background())
-
-	if repo.subsCalls != 0 {
-		t.Fatal("should not fetch subs when repo has no releases")
-	}
-	if len(notifier.sent) != 0 {
-		t.Fatal("should not notify when there's no tag")
-	}
+	f.scanner.runOnce(context.Background())
 }
 
 func TestRateLimitAbortsCycle(t *testing.T) {
-	repo := newMockScannerRepo()
-	repo.repos = []string{"a/b", "c/d"}
-	repo.subsByRepo["c/d"] = []domain.Subscription{{ID: 1}}
-	fetcher := &mockFetcher{
-		tags: map[string]string{"a/b": "", "c/d": "v1"},
-		errs: map[string]error{"a/b": domain.ErrRateLimited},
-	}
-	notifier := &mockReleaseNotifier{}
+	// concurrency=1 + atomic signal flag guarantees second repo is skipped.
+	f := newFixture(t)
+	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"a/b", "c/d"}, nil)
+	f.github.EXPECT().GetLatestRelease(gomock.Any(), "a", "b").Return("", domain.ErrRateLimited)
 
-	newScanner(repo, fetcher, notifier).runOnce(context.Background())
-
-	if fetcher.calls != 1 {
-		t.Fatalf("want 1 GitHub call before abort, got %d", fetcher.calls)
-	}
-	if len(notifier.sent) != 0 {
-		t.Fatal("should not notify when rate-limited")
-	}
+	f.scanner.runOnce(context.Background())
 }
 
 func TestInvalidRepoFormatContinues(t *testing.T) {
-	repo := newMockScannerRepo()
-	repo.repos = []string{"invalid", "golang/go"}
-	repo.subsByRepo["golang/go"] = []domain.Subscription{
+	f := newFixture(t)
+	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"invalid", "golang/go"}, nil)
+	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
+	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return([]domain.Subscription{
 		{ID: 1, Email: "a@x.com", Repo: "golang/go", LastSeenTag: "v1.0"},
-	}
-	fetcher := &mockFetcher{tags: map[string]string{"golang/go": "v1.1"}}
-	notifier := &mockReleaseNotifier{}
+	}, nil)
+	f.repo.EXPECT().UpdateLastSeenTag(gomock.Any(), uint(1), "v1.1").Return(nil)
+	f.notifier.EXPECT().SendReleaseNotification(gomock.Any(), "a@x.com", "golang/go", "v1.1", "").Return(nil)
 
-	newScanner(repo, fetcher, notifier).runOnce(context.Background())
-
-	if len(notifier.sent) != 1 {
-		t.Fatalf("want 1 notification for valid repo, got %d", len(notifier.sent))
-	}
+	f.scanner.runOnce(context.Background())
 }
 
 func TestReposListingErrorAborts(t *testing.T) {
-	repo := newMockScannerRepo()
-	repo.reposErr = errors.New("db down")
-	fetcher := &mockFetcher{}
-	notifier := &mockReleaseNotifier{}
+	// No GitHub EXPECT: listing failure is terminal for the cycle.
+	f := newFixture(t)
+	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return(nil, errors.New("db down"))
 
-	newScanner(repo, fetcher, notifier).runOnce(context.Background())
-
-	if fetcher.calls != 0 {
-		t.Fatal("should not call GitHub when repo listing fails")
-	}
+	f.scanner.runOnce(context.Background())
 }
 
 func TestContextCancelled(t *testing.T) {
-	repo := newMockScannerRepo()
-	repo.repos = []string{"a/b", "c/d"}
-	fetcher := &mockFetcher{tags: map[string]string{"a/b": "", "c/d": ""}}
-	notifier := &mockReleaseNotifier{}
+	// Pool's pre-check skips dispatch on cancelled ctx — no GitHub EXPECTs.
+	f := newFixture(t)
+	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"a/b", "c/d"}, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	f.scanner.runOnce(ctx)
+}
 
-	newScanner(repo, fetcher, notifier).runOnce(ctx)
+func TestSafeCheckRepoRecoversFromPanic(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := mocks.NewMockRepository(ctrl)
+	github := mocks.NewMockReleaseFetcher(ctrl)
+	notifier := mocks.NewMockReleaseNotifier(ctrl)
 
-	if fetcher.calls != 0 {
-		t.Fatalf("want no GitHub calls when ctx cancelled, got %d", fetcher.calls)
-	}
+	github.EXPECT().GetLatestRelease(gomock.Any(), "owner", "repo").Do(
+		func(_ context.Context, _, _ string) { panic("boom") },
+	)
+	s := New(repo, github, notifier, &Config{Interval: time.Minute, Concurrency: 1})
+
+	err := s.safeCheckRepo(context.Background(), "owner/repo")
+	require.NoError(t, err, "panic must be converted to nil so the worker pool can keep dispatching")
+}
+
+func TestPanicInOneRepoDoesNotKillCycle(t *testing.T) {
+	f := newFixture(t)
+	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"bad/one", "good/two"}, nil)
+	f.github.EXPECT().GetLatestRelease(gomock.Any(), "bad", "one").Do(
+		func(_ context.Context, _, _ string) { panic("synthetic panic") },
+	)
+	f.github.EXPECT().GetLatestRelease(gomock.Any(), "good", "two").Return("v2.0", nil)
+	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "good/two").Return([]domain.Subscription{
+		{ID: 1, Email: "ok@x.com", Repo: "good/two", LastSeenTag: "v1.0", UnsubscribeToken: "u"},
+	}, nil)
+	f.repo.EXPECT().UpdateLastSeenTag(gomock.Any(), uint(1), "v2.0").Return(nil)
+	f.notifier.EXPECT().SendReleaseNotification(gomock.Any(), "ok@x.com", "good/two", "v2.0", "u").Return(nil)
+
+	f.scanner.runOnce(context.Background())
+}
+
+func TestUpdateTagFailureSkipsNotification(t *testing.T) {
+	// Persist precedes notify — otherwise a failed persist re-fires on the next scan.
+	f := newFixture(t)
+	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
+	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
+	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return([]domain.Subscription{
+		{ID: 1, Email: "a@x.com", Repo: "golang/go", LastSeenTag: "v1.0", UnsubscribeToken: "u"},
+	}, nil)
+	f.repo.EXPECT().UpdateLastSeenTag(gomock.Any(), uint(1), "v1.1").Return(errors.New("db write failed"))
+
+	f.scanner.runOnce(context.Background())
+}
+
+func TestIsNewTagContract(t *testing.T) {
+	s := &domain.Subscription{LastSeenTag: "v1.0"}
+	assert.True(t, s.IsNewTag("v1.1"))
+	assert.False(t, s.IsNewTag("v1.0"))
+	assert.False(t, s.IsNewTag(""), "empty incoming must not be treated as a regression")
 }

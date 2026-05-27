@@ -64,6 +64,7 @@ func LoadConfig() (*Config, error) {
 		GitHub: github.Config{
 			Token:   os.Getenv("GITHUB_TOKEN"),
 			Timeout: getEnvDuration("GITHUB_TIMEOUT", 10*time.Second),
+			BaseURL: os.Getenv("GITHUB_API_URL"),
 		},
 		Port:   getEnvOrDefault("PORT", "8080"),
 		APIKey: os.Getenv("API_KEY"),

@@ -19,9 +19,12 @@ repos:
   - repo: https://github.com/dnephin/pre-commit-golang
     rev: v0.5.1
     hooks:
+
       - id: go-fmt
+        exclude: '(^|/)mocks/'
       - id: go-imports
         args: ['-local', 'github.com/Andriy-Sydorenko/repo-release-notifier']
+        exclude: '(^|/)mocks/'
       - id: go-unit-tests
 
   - repo: https://github.com/golangci/golangci-lint

@@ -16,10 +16,20 @@ import (
 var repoFormatRegex = regexp.MustCompile(`^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$`)
 
 type SubscriptionRepo interface {
-	CreateSubscriptionWithToken(ctx context.Context, sub *domain.Subscription, token *domain.ConfirmationToken) error
-	FindSubscriptionByEmailAndRepo(ctx context.Context, email, repo string) (*domain.Subscription, error)
+	CreateSubscriptionWithToken(
+		ctx context.Context,
+		sub *domain.Subscription,
+		token *domain.ConfirmationToken,
+	) error
+	FindSubscriptionByEmailAndRepo(ctx context.Context, email, repo string) (
+		*domain.Subscription,
+		error,
+	)
 	FindSubscriptionsByEmail(ctx context.Context, email string) ([]domain.Subscription, error)
-	FindSubscriptionByUnsubscribeToken(ctx context.Context, token string) (*domain.Subscription, error)
+	FindSubscriptionByUnsubscribeToken(ctx context.Context, token string) (
+		*domain.Subscription,
+		error,
+	)
 	ConfirmSubscription(ctx context.Context, id uint) error
 	DeleteSubscription(ctx context.Context, id uint) error
 }
@@ -119,7 +129,13 @@ func (s *Service) Subscribe(ctx context.Context, req domain.SubscribeRequest) er
 		return fmt.Errorf("failed to persist subscription: %w", err)
 	}
 
-	if err := s.notifier.SendConfirmation(ctx, req.Email, req.Repo, confirmToken, unsubToken); err != nil {
+	if err := s.notifier.SendConfirmation(
+		ctx,
+		req.Email,
+		req.Repo,
+		confirmToken,
+		unsubToken,
+	); err != nil {
 		// Persist-then-send: the row is the durable commitment; SMTP is
 		// best-effort and surfaced via log alerting, not 5xx fan-out.
 		log.Printf("failed to send confirmation email for repo=%s: %v", req.Repo, err)
@@ -172,7 +188,10 @@ func (s *Service) Unsubscribe(ctx context.Context, tokenValue string) error {
 	return nil
 }
 
-func (s *Service) GetSubscriptions(ctx context.Context, email string) ([]domain.SubscriptionResponse, error) {
+func (s *Service) GetSubscriptions(
+	ctx context.Context,
+	email string,
+) ([]domain.SubscriptionResponse, error) {
 	email = strings.TrimSpace(email)
 	if email == "" {
 		return nil, domain.ErrInvalidEmail

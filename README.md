@@ -327,30 +327,38 @@ plus ordered teardown — ~15 lines of code for operational polish
 
 ## Testing
 
-Unit tests use the standard `testing` package with hand-rolled
-mocks (no gomock, no testify beyond what stdlib already gives
-you). Tests live next to the code they test:
+Three tiers, gated by Go build tags and orchestrated via the
+`Makefile`:
 
-- `service_test.go` — subscribe / confirm / unsubscribe /
-  get-subscriptions happy and error paths, plus the repo-format
-  regex matrix and DTO conversion.
-- `scanner_test.go` — new-tag emits, same-tag no-op, silent
-  first-scan, empty-tag skip, rate-limit aborts cycle, bad-repo
-  skip-and-continue, ctx-cancelled.
-- `github/client_test.go` — the rate-limit detection matrix and
-  auth-header assertion, driven by `httptest`.
-- `github/cached_client_test.go` — positive/negative caching,
-  rate-limit responses not cached.
-- `api/handler_test.go` — each endpoint end-to-end via `httptest`
-  with a fake service.
-- `api/middleware_test.go` — API-key enabled / disabled / missing
-  / wrong.
-- `domain/schema_test.go` — DTO shape matches the swagger keys
-  exactly, so `UnsubscribeToken` can't accidentally leak.
+- **Unit** (`make test-unit` → `go test ./... -race`) — no
+  containers. Collaborators are faked with `uber-go/mock` mocks
+  (regenerate with `make generate-mocks`); assertions use `testify`.
+  Tests live next to the code they cover:
+  - `service` — subscribe / confirm / unsubscribe /
+    get-subscriptions happy and error paths, plus the repo-format
+    regex matrix and DTO conversion.
+  - `scanner` — new-tag emits, same-tag no-op, silent first-scan,
+    empty-tag skip, rate-limit aborts cycle, bad-repo
+    skip-and-continue, ctx-cancelled.
+  - `github` — rate-limit detection matrix and auth-header
+    assertion via `httptest`; positive/negative caching with
+    rate-limit responses never cached.
+  - `api` — each endpoint end-to-end via `httptest` with a mocked
+    service; API-key enabled / disabled / missing / wrong.
+  - `domain` — DTO shape matches the swagger keys exactly, so
+    `UnsubscribeToken` can't accidentally leak.
+- **Integration** (`make test-integration`, build tag
+  `integration`, in `tests/integration/`) — `testcontainers-go`
+  boots a real Postgres and exercises the repository layer and
+  migrations against the actual schema.
+- **E2E** (`make test-e2e`, build tag `e2e`, in `tests/e2e/`) —
+  `testcontainers-go` boots Postgres + Mailpit + a headless
+  Chromium sidecar driven over CDP; the app runs in-process and
+  the full subscribe → confirm → notify flow is driven through the
+  browser and asserted against captured mail. Requires a Docker
+  daemon.
 
-Integration tests against a real Postgres + Redis would be a
-worthwhile next step; the current interface mocks are deliberate
-unit-level coverage.
+See `docs/testing/` for per-suite detail.
 
 ---
 
@@ -367,7 +375,8 @@ A handful of bonus items from the spec I didn't implement:
   Worth migrating if this ever went into an environment with a
   log aggregator; for now it's noise for no gain.
 
-And one item I *did* choose to leave as `AutoMigrate`: real
-production would want goose or atlas, with reviewable up/down
-migrations. At the scope of this assignment, `AutoMigrate` +
-a raw-SQL partial-index step is enough.
+Schema changes go through versioned, forward-only SQL migrations
+under `internal/db/migrations/` (golang-migrate), applied on
+startup. The baseline migration is idempotent (`IF NOT EXISTS`),
+so it cleanly adopts databases originally provisioned by GORM's
+`AutoMigrate`.

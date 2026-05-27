@@ -2,14 +2,17 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/api/mocks"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
 )
 
@@ -17,52 +20,25 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
-type fakeService struct {
-	subscribeErr    error
-	confirmErr      error
-	unsubscribeErr  error
-	getSubs         []domain.SubscriptionResponse
-	getSubsErr      error
-	subscribeCalled bool
-	unsubCalledTok  string
-	confirmCalledTk string
-}
+func newTestRouter(t *testing.T) (*gin.Engine, *mocks.MockService) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	svc := mocks.NewMockService(ctrl)
+	h := NewHandler(svc)
 
-func (f *fakeService) Subscribe(_ context.Context, _ domain.SubscribeRequest) error {
-	f.subscribeCalled = true
-	return f.subscribeErr
-}
-
-func (f *fakeService) ConfirmSubscription(_ context.Context, token string) error {
-	f.confirmCalledTk = token
-	return f.confirmErr
-}
-
-func (f *fakeService) Unsubscribe(_ context.Context, token string) error {
-	f.unsubCalledTok = token
-	return f.unsubscribeErr
-}
-
-func (f *fakeService) GetSubscriptions(_ context.Context, _ string) ([]domain.SubscriptionResponse, error) {
-	return f.getSubs, f.getSubsErr
-}
-
-func newTestRouter(h *Handler) *gin.Engine {
 	r := gin.New()
 	r.POST("/api/subscribe", h.Subscribe)
 	r.GET("/api/confirm/:token", h.ConfirmSubscription)
 	r.GET("/api/unsubscribe/:token", h.Unsubscribe)
 	r.GET("/api/subscriptions", h.GetSubscriptions)
-	return r
+	return r, svc
 }
 
 func doJSON(t *testing.T, r *gin.Engine, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
-		if err := json.NewEncoder(&buf).Encode(body); err != nil {
-			t.Fatalf("encode: %v", err)
-		}
+		require.NoError(t, json.NewEncoder(&buf).Encode(body))
 	}
 	req := httptest.NewRequest(method, path, &buf)
 	req.Header.Set("Content-Type", "application/json")
@@ -72,123 +48,113 @@ func doJSON(t *testing.T, r *gin.Engine, method, path string, body any) *httptes
 }
 
 func TestSubscribe(t *testing.T) {
-	tests := []struct {
+	t.Run("200 happy path", func(t *testing.T) {
+		r, svc := newTestRouter(t)
+		svc.EXPECT().Subscribe(gomock.Any(), domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"}).Return(nil)
+
+		w := doJSON(t, r, http.MethodPost, "/api/subscribe", domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"})
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("400 missing email — no service call", func(t *testing.T) {
+		// Binding rejects at the handler boundary; svc must not be called.
+		r, _ := newTestRouter(t)
+		w := doJSON(t, r, http.MethodPost, "/api/subscribe", map[string]string{"repo": "golang/go"})
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("400 invalid email — no service call", func(t *testing.T) {
+		r, _ := newTestRouter(t)
+		w := doJSON(t, r, http.MethodPost, "/api/subscribe", map[string]string{"email": "not-email", "repo": "golang/go"})
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	cases := []struct {
 		name       string
-		body       any
 		svcErr     error
 		wantStatus int
 	}{
-		{"200 happy path", domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"}, nil, http.StatusOK},
-		{"400 missing email", map[string]string{"repo": "golang/go"}, nil, http.StatusBadRequest},
-		{"400 invalid email", map[string]string{"email": "not-email", "repo": "golang/go"}, nil, http.StatusBadRequest},
-		{"400 invalid repo format", domain.SubscribeRequest{Email: "a@b.com", Repo: "invalid"}, domain.ErrInvalidRepoFormat, http.StatusBadRequest},
-		{"404 repo not on github", domain.SubscribeRequest{Email: "a@b.com", Repo: "ghost/ghost"}, domain.ErrRepoNotFound, http.StatusNotFound},
-		{"409 already subscribed", domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"}, domain.ErrAlreadySubscribed, http.StatusConflict},
-		{"503 github rate limited", domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"}, domain.ErrRateLimited, http.StatusServiceUnavailable},
+		{"400 invalid repo format", domain.ErrInvalidRepoFormat, http.StatusBadRequest},
+		{"404 repo not on github", domain.ErrRepoNotFound, http.StatusNotFound},
+		{"409 already subscribed", domain.ErrAlreadySubscribed, http.StatusConflict},
+		{"503 github rate limited", domain.ErrRateLimited, http.StatusServiceUnavailable},
 	}
-
-	for _, tc := range tests {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := &fakeService{subscribeErr: tc.svcErr}
-			r := newTestRouter(NewHandler(svc))
+			r, svc := newTestRouter(t)
+			svc.EXPECT().Subscribe(gomock.Any(), gomock.Any()).Return(tc.svcErr)
 
-			w := doJSON(t, r, http.MethodPost, "/api/subscribe", tc.body)
-
-			if w.Code != tc.wantStatus {
-				t.Fatalf("status=%d, want %d, body=%s", w.Code, tc.wantStatus, w.Body.String())
-			}
+			w := doJSON(t, r, http.MethodPost, "/api/subscribe", domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"})
+			assert.Equal(t, tc.wantStatus, w.Code)
 		})
 	}
 }
 
 func TestConfirm(t *testing.T) {
-	tests := []struct {
-		name       string
-		token      string
-		svcErr     error
-		wantStatus int
-	}{
-		{"200 valid token", "abc", nil, http.StatusOK},
-		{"404 token not found", "missing", domain.ErrTokenNotFound, http.StatusNotFound},
-	}
+	t.Run("200 valid token", func(t *testing.T) {
+		r, svc := newTestRouter(t)
+		svc.EXPECT().ConfirmSubscription(gomock.Any(), "abc").Return(nil)
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			svc := &fakeService{confirmErr: tc.svcErr}
-			r := newTestRouter(NewHandler(svc))
+		w := doJSON(t, r, http.MethodGet, "/api/confirm/abc", nil)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
 
-			w := doJSON(t, r, http.MethodGet, "/api/confirm/"+tc.token, nil)
+	t.Run("404 token not found", func(t *testing.T) {
+		r, svc := newTestRouter(t)
+		svc.EXPECT().ConfirmSubscription(gomock.Any(), "missing").Return(domain.ErrTokenNotFound)
 
-			if w.Code != tc.wantStatus {
-				t.Fatalf("status=%d, want %d, body=%s", w.Code, tc.wantStatus, w.Body.String())
-			}
-		})
-	}
+		w := doJSON(t, r, http.MethodGet, "/api/confirm/missing", nil)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
 }
 
 func TestUnsubscribe(t *testing.T) {
-	tests := []struct {
-		name       string
-		token      string
-		svcErr     error
-		wantStatus int
-	}{
-		{"200 valid token", "tok", nil, http.StatusOK},
-		{"404 token not found", "missing", domain.ErrTokenNotFound, http.StatusNotFound},
-	}
+	t.Run("200 valid token passes through", func(t *testing.T) {
+		// Exact-match arg: path param forwarded verbatim.
+		r, svc := newTestRouter(t)
+		svc.EXPECT().Unsubscribe(gomock.Any(), "tok").Return(nil)
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			svc := &fakeService{unsubscribeErr: tc.svcErr}
-			r := newTestRouter(NewHandler(svc))
+		w := doJSON(t, r, http.MethodGet, "/api/unsubscribe/tok", nil)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
 
-			w := doJSON(t, r, http.MethodGet, "/api/unsubscribe/"+tc.token, nil)
+	t.Run("404 token not found", func(t *testing.T) {
+		r, svc := newTestRouter(t)
+		svc.EXPECT().Unsubscribe(gomock.Any(), gomock.Any()).Return(domain.ErrTokenNotFound)
 
-			if w.Code != tc.wantStatus {
-				t.Fatalf("status=%d, want %d, body=%s", w.Code, tc.wantStatus, w.Body.String())
-			}
-			if tc.wantStatus == http.StatusOK && svc.unsubCalledTok != tc.token {
-				t.Fatalf("svc got token %q, want %q", svc.unsubCalledTok, tc.token)
-			}
-		})
-	}
+		w := doJSON(t, r, http.MethodGet, "/api/unsubscribe/missing", nil)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
 }
 
 func TestGetSubscriptions(t *testing.T) {
-	tests := []struct {
-		name       string
-		query      string
-		svc        *fakeService
-		wantStatus int
-		wantLen    int
-	}{
-		{"200 returns list", "?email=a@b.com",
-			&fakeService{getSubs: []domain.SubscriptionResponse{
-				{Email: "a@b.com", Repo: "golang/go", Confirmed: true, LastSeenTag: "v1"},
-			}}, http.StatusOK, 1},
-		{"200 empty list", "?email=nobody@b.com", &fakeService{}, http.StatusOK, 0},
-		{"400 missing email", "", &fakeService{getSubsErr: domain.ErrInvalidEmail}, http.StatusBadRequest, 0},
-		{"400 invalid email", "?email=not-email", &fakeService{getSubsErr: domain.ErrInvalidEmail}, http.StatusBadRequest, 0},
-	}
+	t.Run("200 returns list", func(t *testing.T) {
+		r, svc := newTestRouter(t)
+		svc.EXPECT().GetSubscriptions(gomock.Any(), "a@b.com").Return([]domain.SubscriptionResponse{
+			{Email: "a@b.com", Repo: "golang/go", Confirmed: true, LastSeenTag: "v1"},
+		}, nil)
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			r := newTestRouter(NewHandler(tc.svc))
+		w := doJSON(t, r, http.MethodGet, "/api/subscriptions?email=a@b.com", nil)
+		require.Equal(t, http.StatusOK, w.Code)
 
-			w := doJSON(t, r, http.MethodGet, "/api/subscriptions"+tc.query, nil)
+		var got []domain.SubscriptionResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		assert.Len(t, got, 1)
+	})
 
-			if w.Code != tc.wantStatus {
-				t.Fatalf("status=%d, want %d, body=%s", w.Code, tc.wantStatus, w.Body.String())
-			}
-			if tc.wantStatus == http.StatusOK {
-				var got []domain.SubscriptionResponse
-				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-					t.Fatalf("decode response: %v", err)
-				}
-				if len(got) != tc.wantLen {
-					t.Fatalf("got %d subs, want %d", len(got), tc.wantLen)
-				}
-			}
-		})
-	}
+	t.Run("200 empty list", func(t *testing.T) {
+		r, svc := newTestRouter(t)
+		svc.EXPECT().GetSubscriptions(gomock.Any(), gomock.Any()).Return(nil, nil)
+
+		w := doJSON(t, r, http.MethodGet, "/api/subscriptions?email=nobody@b.com", nil)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("400 invalid email", func(t *testing.T) {
+		r, svc := newTestRouter(t)
+		svc.EXPECT().GetSubscriptions(gomock.Any(), gomock.Any()).Return(nil, domain.ErrInvalidEmail)
+
+		w := doJSON(t, r, http.MethodGet, "/api/subscriptions?email=not-email", nil)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
 }

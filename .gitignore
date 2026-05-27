@@ -8,6 +8,10 @@
 *.so
 *.dylib
 
+# Stray binaries from `go build ./cmd/<name>` runs at the repo root.
+/server
+/e2e-server
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -32,4 +36,6 @@ go.work.sum
 .vscode/
 .DS_Store
 
-TEST_TASK.md
+# Local Claude configuration
+.claude/
+CLAUDE.md

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -115,7 +115,7 @@ func isRateLimited(resp *http.Response) bool {
 		return true
 	}
 	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-		log.Printf("github: rate-limited, retry after %s", retryAfter)
+		slog.Warn("github: rate-limited", "retry_after", retryAfter)
 		return true
 	}
 	return false

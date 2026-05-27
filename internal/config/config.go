@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -14,6 +15,7 @@ import (
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/db"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/github"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/observability/logging"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner"
 )
 
@@ -25,6 +27,7 @@ type Config struct {
 	SMTP    notifier.Config
 	Scanner scanner.Config
 	GitHub  github.Config
+	Log     logging.Config
 
 	Port   string
 	APIKey string
@@ -66,6 +69,10 @@ func LoadConfig() (*Config, error) {
 			Timeout: getEnvDuration("GITHUB_TIMEOUT", 10*time.Second),
 			BaseURL: os.Getenv("GITHUB_API_URL"),
 		},
+		Log: logging.Config{
+			Level:  logging.Level(strings.ToLower(getEnvOrDefault("LOG_LEVEL", "info"))),
+			Format: logging.Format(strings.ToLower(getEnvOrDefault("LOG_FORMAT", "text"))),
+		},
 		Port:   getEnvOrDefault("PORT", "8080"),
 		APIKey: os.Getenv("API_KEY"),
 	}
@@ -95,6 +102,9 @@ func (c *Config) validate() error {
 	}
 	if c.SMTP.Host == "" || c.SMTP.Username == "" || c.SMTP.Password == "" {
 		return fmt.Errorf("SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD are required")
+	}
+	if err := c.Log.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

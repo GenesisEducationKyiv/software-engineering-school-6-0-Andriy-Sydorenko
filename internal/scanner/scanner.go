@@ -3,7 +3,7 @@ package scanner
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -13,7 +13,10 @@ import (
 
 type Repository interface {
 	FindDistinctConfirmedRepos(ctx context.Context) ([]string, error)
-	FindConfirmedSubscriptionsByRepo(ctx context.Context, repo string) ([]domain.Subscription, error)
+	FindConfirmedSubscriptionsByRepo(ctx context.Context, repo string) (
+		[]domain.Subscription,
+		error,
+	)
 	UpdateLastSeenTag(ctx context.Context, id uint, tag string) error
 }
 
@@ -66,7 +69,11 @@ func New(
 }
 
 func (s *Scanner) Run(ctx context.Context) {
-	log.Printf("scanner started: interval=%s concurrency=%d", s.cfg.Interval, s.cfg.Concurrency)
+	slog.InfoContext(
+		ctx, "scanner started",
+		"interval", s.cfg.Interval,
+		"concurrency", s.cfg.Concurrency,
+	)
 
 	ticker := time.NewTicker(s.cfg.Interval)
 	defer ticker.Stop()
@@ -80,13 +87,17 @@ func (s *Scanner) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("scanner stopped: %v", ctx.Err())
+			slog.InfoContext(ctx, "scanner stopped", "err", ctx.Err())
 			return
 		case <-ticker.C:
 			start := time.Now()
 			s.runOnce(ctx)
 			if elapsed := time.Since(start); elapsed > budget {
-				log.Printf("scanner: tick exceeded budget (%s > %s), skipping next tick", elapsed, budget)
+				slog.WarnContext(
+					ctx, "scanner: tick exceeded budget, skipping next tick",
+					"elapsed", elapsed,
+					"budget", budget,
+				)
 				select {
 				case <-ticker.C:
 				default:
@@ -99,7 +110,7 @@ func (s *Scanner) Run(ctx context.Context) {
 func (s *Scanner) runOnce(ctx context.Context) {
 	repos, err := s.repo.FindDistinctConfirmedRepos(ctx)
 	if err != nil {
-		log.Printf("scanner: failed to list repos: %v", err)
+		slog.ErrorContext(ctx, "scanner: failed to list repos", "err", err)
 		return
 	}
 
@@ -107,20 +118,22 @@ func (s *Scanner) runOnce(ctx context.Context) {
 	// per-call deadlines; siblings short-circuit on the next check.
 	var rateLimitHit atomic.Bool
 
-	s.pool.Run(ctx, repos, func(ctx context.Context, repo string) {
-		if rateLimitHit.Load() {
-			return
-		}
-		if err := s.safeCheckRepo(ctx, repo); err != nil {
-			if errors.Is(err, domain.ErrRateLimited) {
-				if rateLimitHit.CompareAndSwap(false, true) {
-					log.Printf("scanner: GitHub rate limit hit, aborting cycle")
-				}
+	s.pool.Run(
+		ctx, repos, func(ctx context.Context, repo string) {
+			if rateLimitHit.Load() {
 				return
 			}
-			log.Printf("scanner: repo=%s error: %v", repo, err)
-		}
-	})
+			if err := s.safeCheckRepo(ctx, repo); err != nil {
+				if errors.Is(err, domain.ErrRateLimited) {
+					if rateLimitHit.CompareAndSwap(false, true) {
+						slog.WarnContext(ctx, "scanner: GitHub rate limit hit, aborting cycle")
+					}
+					return
+				}
+				slog.ErrorContext(ctx, "scanner: repo check failed", "repo", repo, "err", err)
+			}
+		},
+	)
 }
 
 // safeCheckRepo recovers from panics so one bad repo doesn't tear down
@@ -129,7 +142,7 @@ func (s *Scanner) runOnce(ctx context.Context) {
 func (s *Scanner) safeCheckRepo(ctx context.Context, repo string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("scanner: recovered panic on repo=%s: %v", repo, r)
+			slog.ErrorContext(ctx, "scanner: recovered panic", "repo", repo, "panic", r)
 			err = nil
 		}
 	}()
@@ -142,9 +155,7 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		return domain.ErrInvalidRepoFormat
 	}
 
-	// Per-call deadline is enforced by the GitHub client itself
-	// (httpClient.Timeout, set from config.GitHubTimeout). A hung
-	// upstream cannot stall the worker; the pool stays drainable.
+	// Per-call deadline is enforced by the GitHub client.
 	tag, err := s.github.GetLatestRelease(ctx, parts[0], parts[1])
 	if err != nil {
 		return err
@@ -165,14 +176,32 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		}
 		previous := sub.LastSeenTag
 		if err := s.repo.UpdateLastSeenTag(ctx, sub.ID, tag); err != nil {
-			log.Printf("scanner: failed to update last_seen_tag for id=%d: %v", sub.ID, err)
+			slog.ErrorContext(
+				ctx, "scanner: failed to update last_seen_tag",
+				"id", sub.ID,
+				"err", err,
+			)
 			continue
 		}
 		if previous == "" {
 			continue
 		}
-		if err := s.notifier.SendReleaseNotification(ctx, sub.Email, sub.Repo, tag, sub.UnsubscribeToken); err != nil {
-			log.Printf("scanner: failed to notify %s about %s@%s: %v", sub.Email, repo, tag, err)
+		if err := s.notifier.SendReleaseNotification(
+			ctx,
+			sub.Email,
+			sub.Repo,
+			tag,
+			sub.UnsubscribeToken,
+		); err != nil {
+			// sub.ID is logged in place of sub.Email — email is PII per
+			// the project's security rules.
+			slog.ErrorContext(
+				ctx, "scanner: failed to send release notification",
+				"id", sub.ID,
+				"repo", repo,
+				"tag", tag,
+				"err", err,
+			)
 		}
 	}
 

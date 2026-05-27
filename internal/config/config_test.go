@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/observability/logging"
 )
 
 func TestGetEnvOrDefault(t *testing.T) {
@@ -108,5 +110,6 @@ func baseValidConfig() *Config {
 	c.SMTP.Host = "smtp.example.com"
 	c.SMTP.Username = "u"
 	c.SMTP.Password = "p"
+	c.Log = logging.Config{Level: logging.LevelInfo, Format: logging.FormatJSON}
 	return c
 }

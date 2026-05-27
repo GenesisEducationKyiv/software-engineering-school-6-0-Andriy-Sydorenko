@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +17,7 @@ import (
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/db"
 	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/github"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/observability/logging"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/repository"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/service"
@@ -24,7 +25,8 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		log.Printf("fatal: %v", err)
+		// Pre-logger: slog default isn't configured until inside run().
+		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -34,6 +36,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	logger := logging.NewLogger(cfg.Log, os.Stdout)
+	slog.SetDefault(logger)
 
 	db, err := database.NewPostgres(&cfg.DB)
 	if err != nil {
@@ -72,21 +77,22 @@ func run() error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("server shutdown error: %v", err)
+			slog.Error("server shutdown error", "err", err)
 		}
 	}()
 
-	log.Printf("starting server on %s", server.Addr)
+	slog.Info("starting server", "addr", server.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("server: %w", err)
 	}
-	log.Printf("shutdown complete")
+	slog.Info("shutdown complete")
 	return nil
 }
 
 // buildGitHubClients returns validator and fetcher views of the
 // GitHub client, optionally wrapped in the Redis cache decorator.
 // Cache failure is non-fatal.
+// TODO: move and rewrite github client init
 func buildGitHubClients(cfg *config.Config) (service.RepoValidator, scanner.ReleaseFetcher) {
 	if cfg.Redis.DSN() == "" {
 		c := githubclient.NewClient(&cfg.GitHub)
@@ -94,11 +100,11 @@ func buildGitHubClients(cfg *config.Config) (service.RepoValidator, scanner.Rele
 	}
 	rdb, err := cache.NewRedis(&cfg.Redis)
 	if err != nil {
-		log.Printf("redis unavailable, continuing without cache: %v", err)
+		slog.Warn("redis unavailable, continuing without cache", "err", err)
 		c := githubclient.NewClient(&cfg.GitHub)
 		return c, c
 	}
 	cached := githubclient.NewCachedClient(githubclient.NewClient(&cfg.GitHub), rdb)
-	log.Printf("github client: redis cache enabled")
+	slog.Info("github client: redis cache enabled")
 	return cached, cached
 }

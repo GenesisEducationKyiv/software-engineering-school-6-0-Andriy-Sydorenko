@@ -1,7 +1,7 @@
 package api
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -12,7 +12,7 @@ import (
 func subscribePage(c *gin.Context) {
 	body, err := templates.Page("subscribe.html")
 	if err != nil {
-		log.Printf("subscribe page render: %v", err)
+		slog.ErrorContext(c.Request.Context(), "subscribe page render", "err", err)
 		c.String(http.StatusInternalServerError, "internal server error")
 		return
 	}

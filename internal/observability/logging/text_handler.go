@@ -49,10 +49,10 @@ func NewTextHandler(w io.Writer, opts *slog.HandlerOptions) *TextHandler {
 }
 
 func shouldColor(w io.Writer) bool {
-	if _, set := os.LookupEnv("NO_COLOR"); set {
+	if _, off := os.LookupEnv("NO_COLOR"); off {
 		return false
 	}
-	if _, set := os.LookupEnv("FORCE_COLOR"); set {
+	if _, on := os.LookupEnv("FORCE_COLOR"); on {
 		return true
 	}
 	f, ok := w.(*os.File)

@@ -8,50 +8,60 @@ Accepted
 
 ## Context
 
-Ad-hoc `log.Printf` across `scanner`, `service`, `api`, and `github` produces
-unstructured text — no levels, no machine-readable fields. An aggregator can't
-filter by level or field, errors can't route to alerting, and there's no hook to
-redact PII.
+Ad-hoc `log.Printf` calls across `scanner`, `service`, `api`, and `github`
+produce unstructured text with no severity levels and no machine-readable fields.
+A log aggregator cannot filter by level or field, errors cannot be routed to
+alerting, and there is no hook to redact PII before emission.
 
 ---
 
 ## Decision
 
-Adopt `log/slog` (stdlib, Go 1.21+) as the sole logging backbone — no third-party
-dep. In `internal/observability/logging`:
+Adopt `log/slog` (stdlib, since Go 1.21) as the sole logging backbone — no
+third-party dependency. Implemented in `internal/observability/logging`:
 
-- `Config{Level, Format}` from `LOG_LEVEL` (debug|info|warn|error) and `LOG_FORMAT`
-  (json|text), rejected at config load if invalid; `AddSource` only at debug.
-- `NewLogger` — a custom `TextHandler` for dev (the default, `LOG_FORMAT=text`) and
-  stdlib JSON for prod (`LOG_FORMAT=json`). The text handler writes colored TTY lines
-  (honors `NO_COLOR`/`FORCE_COLOR`), unwinds the `err` attr via `errors.Unwrap`, and
-  calls `Value.Resolve()` per attr so `slog.LogValuer` can redact secrets/PII.
-  `WithGroup` is a no-op (JSON-only concern).
-- `main.go` configures `slog.SetDefault`; service and scanner call sites use the
-  `*Context` variants and log entity IDs, not raw structs.
+- `Config{Level, Format}` — `LOG_LEVEL` (debug|info|warn|error) and `LOG_FORMAT`
+  (json|text), validated in `internal/config`. `AddSource` is on only at debug.
+- `NewLogger(cfg, w)` — JSON handler for prod (default), custom `TextHandler` for
+  dev: Gin-style colored lines (TTY-gated, honors `NO_COLOR`/`FORCE_COLOR`), the
+  `err` attr unwound via `errors.Unwrap`, and `Value.Resolve()` on every attr so
+  `slog.LogValuer` can redact secrets/PII. `WithGroup` is a no-op (JSON concern).
+- `main.go` calls `slog.SetDefault`; its one pre-logger failure uses
+  `fmt.Fprintf(os.Stderr, ...)`. Call sites use `*Context` level calls and log
+  entity IDs, not raw structs.
 
 ---
 
 ## Consequences
 
-- **+** Real levels + structured fields → aggregator filtering and alerting, no regex.
-  Env-tunable, zero new deps. PII redaction via `LogValuer`.
-- **−** `TextHandler` is hand-maintained code we own and must keep tested; `WithGroup`
-  drops the group prefix in text mode. Slower per call than `zap`/`zerolog`, but
-  logging is off the hot path (one record per scan tick / request), so it doesn't bind.
+### Positive
+
+- Structured fields + real levels → aggregator filtering and alerting, no regex.
+- Env-tunable: JSON for prod, colored text for dev. Zero new deps.
+- PII redaction via `LogValuer`; the `slog.Handler` interface isolates call sites
+  from output format.
+
+### Negative
+
+- `TextHandler` is hand-maintained code the project owns and must keep tested.
+- `WithGroup` drops the group prefix in text mode (text vs. JSON asymmetry).
+- Slower per call than `zap`/`zerolog`; logging sits off the hot path (one record
+  per scan tick and per HTTP request), so the cost does not bind.
 
 ---
 
 ## Alternatives Considered
 
-- **zap / zerolog** — faster, but add a dep and a non-`slog` call-site idiom; their
-  throughput edge doesn't apply off the hot path. Rejected per "least change, no deps".
-- **log.Printf wrapper** — quasi-structured, unparseable, no redaction hook. Defers the
-  cost without fixing it.
+- **uber-go/zap / rs/zerolog** — faster, but add a dependency and a non-`slog`
+  call-site idiom (locking in a future re-migration). Their throughput edge does
+  not apply when logging is off the hot path. Rejected per "least change, no deps".
+- **log.Printf wrapper** — quasi-structured text parsers can't reliably ingest,
+  levels stay advisory strings, no redaction hook. Defers cost without fixing it.
 
 ---
 
 ## References
 
-- log/slog: <https://pkg.go.dev/log/slog>; NO_COLOR: <https://no-color.org>
-- ADR-007 (layering), ADR-008 (testing — covers `TextHandler` tests).
+- log/slog: <https://pkg.go.dev/log/slog>
+- NO_COLOR: <https://no-color.org>
+- ADR-007 (layering), ADR-008 (testing strategy — covers `TextHandler` tests).

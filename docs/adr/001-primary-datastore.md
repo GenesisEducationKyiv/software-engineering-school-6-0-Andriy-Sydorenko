@@ -38,7 +38,6 @@ Redis is used only as a cache for the GitHub client - never as a primary store.
 - Relational integrity enforced by the DB, not the app.
 - Mature concurrency, indexing, and transactional isolation.
 - Broad operational tooling (backup, migration, observability).
-- Direct GORM integration.
 
 **Negative**
 - Dedicated infrastructure vs. an embedded DB; local dev needs Docker.

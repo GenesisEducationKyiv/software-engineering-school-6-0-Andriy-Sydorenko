@@ -55,7 +55,7 @@ flowchart LR
     User -->|click confirm/unsubscribe link| API
     SMTP[(SMTP relay)] -->|email| User
 
-    subgraph Service [single Go binary]
+    subgraph App [single Go binary]
       API --> Service[Service layer]
       Scanner[Scanner ticker] --> Service
       Service --> Repo[Repository]
@@ -96,11 +96,11 @@ flowchart LR
 
 ## 6. Data Model
 
-See **ADR-001 - Primary Datastore** for the ER diagram and the partial-unique-index rationale. Summary:
+See **ADR-001 - Primary Datastore** for the ER diagram and datastore rationale. Summary:
 
-- `subscriptions(id, email, repo, confirmed, last_seen_tag, unsubscribe_token, ...soft-delete)`
-- `confirmation_tokens(id, token, subscription_id FK ON DELETE CASCADE, ...)`
-- Partial unique index on `(email, repo) WHERE deleted_at IS NULL` so re-subscribe works after unsubscribe.
+- `subscriptions(id, email, repo, confirmed, last_seen_tag, unsubscribe_token, created_at, updated_at)`
+- `confirmation_tokens(id, token, subscription_id FK ON DELETE CASCADE, created_at)`
+- Unique index on `(email, repo)`. Unsubscribe hard-deletes the row, so re-subscribe after unsubscribe just inserts a fresh row.
 
 `last_seen_tag` is the **dedup key**: a release is "new" iff GitHub reports a tag different from the one persisted on the subscription row. This makes the notification path effectively at-most-once per `(subscription, tag)` - see §9 for the failure modes this admits.
 
@@ -114,7 +114,7 @@ Authoritative source: `swagger.yaml`. Summary:
 |---|---|---|---|
 | `POST` | `/api/subscribe` | Create unconfirmed subscription, send confirmation email | 400 invalid repo, 404 repo missing, 409 duplicate, 503 GitHub rate-limited |
 | `GET` | `/api/confirm/:token` | Set `confirmed=true`, delete token | 404 token unknown |
-| `GET` / `POST` | `/api/unsubscribe/:token` | Soft-delete subscription | 404 token unknown |
+| `GET` / `POST` | `/api/unsubscribe/:token` | Delete subscription | 404 token unknown |
 | `GET` | `/api/subscriptions` | List active subs for an email | 400 invalid email |
 | `GET` | `/health` | Liveness | - |
 | `GET` | `/` | HTML subscription form | - |
@@ -191,7 +191,7 @@ sequenceDiagram
 
     Mail->>API: POST /api/unsubscribe/:token  (List-Unsubscribe-Post)
     API->>Svc: Unsubscribe(token)
-    Svc->>Repo: soft-delete by unsubscribe_token
+    Svc->>Repo: delete by unsubscribe_token
     API-->>Mail: 200 OK
 ```
 
@@ -256,13 +256,13 @@ Current shape is **one process, one scanner**. Each stage has a concrete trigger
 
 ## 11. Security & Privacy
 
-- **Tokens.** UUID v4, opaque (not signed). Separate confirm and unsubscribe tokens. Confirm tokens are one-shot and deleted on use. Unsubscribe tokens are long-lived (must survive in mail clients) and revoked by soft-delete on the subscription row. See ADR-005 for the full rationale, including future work (TTL/sweeper, constant-time compare, Referrer-Policy).
+- **Tokens.** UUID v4, opaque (not signed). Separate confirm and unsubscribe tokens. Confirm tokens are one-shot and deleted on use. Unsubscribe tokens are long-lived (must survive in mail clients) and revoked when the subscription row is deleted. See ADR-005 for the full rationale, including future work (TTL/sweeper, constant-time compare, Referrer-Policy).
 - **Abuse / email-bombing - known gap.** `POST /api/subscribe` is the only unauthenticated write endpoint that triggers an outbound side effect (confirmation mail to a user-supplied address). It is **not currently rate-limited.** The confirm-token TTL bounds unconfirmed-row growth, but does not stop an attacker from flooding a victim's inbox. If this becomes a real problem, the standard mitigations are a per-IP token bucket on subscribe, a per-email cooldown (independent of IP, returning the same response shape whether the mail was sent or suppressed), and a CAPTCHA on the HTML form.
 - **Auth.** The public subscribe / confirm / unsubscribe endpoints are intentionally open. Optional `X-API-Key` (constant-time compared) gates admin/list endpoints.
 - **Inputs.** `repo` matched against `^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$` before any external call. Email validated by `net/mail`.
 - **SQL.** Parameterized through GORM; no string-concatenated queries.
 - **Secrets.** GitHub token, SMTP creds, API key via env / secret manager only. Never logged.
-- **PII.** Only email is collected. Soft-deleted rows retain email for audit; document a hard-delete job if regulatory requirements appear.
+- **PII.** Only email is collected. Unsubscribe hard-deletes the row, so the email is physically removed - no tombstone retention to reconcile against erasure requests.
 - **Network.** No inbound webhook endpoint - outbound only - reduces attack surface vs. a push-based design (see ADR-002).
 
 ---
@@ -283,11 +283,10 @@ Current shape is **one process, one scanner**. Each stage has a concrete trigger
 
 ## 13. Open Questions
 
-1. Hard-delete cadence for soft-deleted subscriptions (GDPR-style requirement).
-2. Per-subscription pre-release / draft filtering - is the data model ready, or do we need a `release_filter` column?
-3. ETag-based caching layer - worth the complexity, or is plain TTL caching enough at current scale? See ADR-002 Future Work for the cost/benefit numbers.
-4. Outbox pattern for SMTP - do we have a real duplicate problem yet, or is this premature? Pending ADR.
-5. Bounce / suppression handling - do we ingest DSN reports, maintain a suppression list, and auto-soft-delete after a bounce threshold? Defer until bounce rate becomes measurable.
+1. Per-subscription pre-release / draft filtering - is the data model ready, or do we need a `release_filter` column?
+2. ETag-based caching layer - worth the complexity, or is plain TTL caching enough at current scale? See ADR-002 Future Work for the cost/benefit numbers.
+3. Outbox pattern for SMTP - do we have a real duplicate problem yet, or is this premature? Pending ADR.
+4. Bounce / suppression handling - do we ingest DSN reports, maintain a suppression list, and auto-delete after a bounce threshold? Defer until bounce rate becomes measurable.
 
 ---
 

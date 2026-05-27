@@ -54,7 +54,7 @@ Constraints: any public repo without owner cooperation; bounded latency; stay wi
 
 ## Future Work
 
-- **ETag / `If-None-Match`.** `304 Not Modified` doesn't count against the rate limit; ≥95% of polls would land 304 in a typical workload, lifting the capacity ceiling from ~416 distinct repos to several thousand on the same 5,000 req/h budget. ~half-day; no schema change.
+- **ETag / `If-None-Match`.** `304 Not Modified` responses don't count against the rate limit, so caching unchanged tags lifts the per-tick repo ceiling on the same 5,000 req/h budget. No schema change.
 - **Leader election** via `pg_try_advisory_lock` for multi-replica safety. Gated on ADR-004 migration to versioned SQL.
 - **Outbox-backed delivery** (ADR-006) - flips at-most-once → at-least-once; today the scanner calls the notifier directly, tomorrow it publishes to an outbox drained by a separate worker.
 - **Hybrid push/pull** for repos whose owners opt into webhooks.

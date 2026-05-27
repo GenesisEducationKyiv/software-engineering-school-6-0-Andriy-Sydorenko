@@ -101,8 +101,8 @@ is the only place that wires the whole graph together.
    Anything else is a 400 before any external call, so we don't
    burn rate-limit budget on malformed input.
 2. Checks for an existing subscription on `(email, repo)` and
-   returns 409 if found. Soft-deleted rows don't count — see the
-   partial-index note further down.
+   returns 409 if found. Unsubscribing hard-deletes the row, so a
+   user who left can always re-subscribe.
 3. Calls `GET /repos/{owner}/{repo}` on the GitHub API. A 404
    bubbles up as a 404; a 429 or 403 with `X-RateLimit-Remaining: 0`
    / `Retry-After` becomes a 503.
@@ -121,7 +121,7 @@ is the only place that wires the whole graph together.
 token row. One-shot.
 
 `GET /api/unsubscribe/:token` looks the subscription up by its
-unsubscribe token and soft-deletes it. `POST /api/unsubscribe/:token`
+unsubscribe token and deletes it. `POST /api/unsubscribe/:token`
 is the same handler — exposed as POST too so the one-click
 unsubscribe header in outgoing mail works natively in Gmail and
 Apple Mail.
@@ -160,24 +160,15 @@ Two tables.
 
 `subscriptions`:
 `id, email, repo, confirmed, last_seen_tag, unsubscribe_token,
-created_at, updated_at, deleted_at`
+created_at, updated_at`
 
 `confirmation_tokens`:
-`id, token, subscription_id (FK, ON DELETE CASCADE), created_at,
-deleted_at`
+`id, token, subscription_id (FK, ON DELETE CASCADE), created_at`
 
-**Partial unique index.** GORM's `uniqueIndex` tag produces a
-plain unique index on `(email, repo)`, which counts soft-deleted
-rows — so a user who unsubscribed from `golang/go` could never
-re-subscribe to it. On migration we drop that index and create
-
-```
-CREATE UNIQUE INDEX idx_email_repo_live
-  ON subscriptions (email, repo) WHERE deleted_at IS NULL;
-```
-
-Re-subscribing now works; the tombstone row still exists for
-audit purposes but doesn't block live writes.
+**Unique index on `(email, repo)`.** Subscriptions are hard-deleted
+on unsubscribe, so a plain unique index is enough — once the row is
+gone the same `(email, repo)` pair can be inserted again. No tombstone
+rows, no partial index, no `deleted_at` filtering on reads.
 
 ---
 

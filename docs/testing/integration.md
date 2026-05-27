@@ -19,7 +19,7 @@ bugs that need a real database to surface**:
   composed (the right handler is mounted at the right path with the
   right middleware in front).
 - Each endpoint's **DB side-effects** match what the response claims:
-  row counts, `confirmed` flag flips, soft-delete via `deleted_at`,
+  row counts, `confirmed` flag flips, hard-delete on unsubscribe,
   token lifecycle (creation, single-use, cleanup).
 - Sentinel errors propagate up the stack and map to the right HTTP
   status — proven against a real router, not a handler unit test.
@@ -60,13 +60,13 @@ where the assertions live. The interesting cases:
 ### `GET /api/confirm/:token`
 
 - **Happy path** — `confirmed=true` flipped on the subscription, the
-  token row soft-deleted (one-shot).
+  token row deleted (one-shot).
 - **Unknown token → 404** — no DB writes on a miss; nothing leaks.
 
 ### `GET /api/unsubscribe/:token`
 
-- **Happy path** — subscription soft-deleted via `deleted_at`,
-  observable through `gorm`'s soft-delete query.
+- **Happy path** — subscription hard-deleted, observable through a
+  zero row-count query on the email.
 - **Unknown token → 404** — same isolation as confirm.
 
 ### `POST /api/unsubscribe/:token`
@@ -145,7 +145,7 @@ Reviewer questions when reading an integration test change:
 1. **Does the test assert on a DB side-effect, not just the
    response?** A test that only checks the HTTP status is half a
    test — the response might lie. Look for `db.First(&sub, ...)` /
-   `Where("deleted_at IS NOT NULL")` / row-count queries.
+   row-count queries.
 2. **Are tokens read from the mailer stub, not pre-computed?**
    `readTokenValue(stub)` proves the service actually handed them
    off; pre-computing the token in the test misses the seam.

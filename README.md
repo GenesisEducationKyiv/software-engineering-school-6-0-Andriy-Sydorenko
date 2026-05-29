@@ -353,6 +353,65 @@ See `docs/testing/` for per-suite detail.
 
 ---
 
+## Observability: logs in Elasticsearch + Kibana
+
+The app emits structured `slog` JSON to stdout (`LOG_FORMAT=json`). A **Filebeat**
+sidecar tails the app container's Docker log files, parses the JSON, and ships it
+to **Elasticsearch**; **Kibana** provides search and aggregation. The app stays
+decoupled — no ES client, no ES dependency. Filebeat reads the on-disk log files
+with a position registry, so it survives restarts and never silently drops logs.
+See ADR-010 for the pipeline decision (and why the push-driver alternative was
+reverted).
+
+The stack lives in its own compose file. This one command starts **all
+containers** — app, Postgres, Redis, Elasticsearch, Kibana and Filebeat —
+combined into one project so they share a network:
+
+```
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build -d
+```
+
+Tear everything down with `... down` (add `-v` to also wipe Elasticsearch data).
+
+- App: <http://localhost:8080> (or your `PORT`)
+- Elasticsearch: <http://localhost:9200>
+- Kibana: <http://localhost:5601>
+
+Local/dev posture only: ES security and TLS are disabled — do not expose.
+
+### See the logs
+
+1. Generate activity (subscribe, or wait for a scanner tick).
+2. Confirm the daily index exists:
+
+   ```
+   curl localhost:9200/_cat/indices/repo-release-notifier-*
+   ```
+
+3. Create the Kibana **data view** (one-time; Kibana needs it before it
+   can show anything). In Kibana → **Stack Management → Data Views →
+   Create data view**, set the name/pattern to `repo-release-notifier-*`
+   and the time field to `@timestamp`.
+
+   Or script it against the Kibana API:
+
+   ```
+   curl -X POST localhost:5601/api/data_views/data_view \
+     -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+     -d '{"data_view":{"title":"repo-release-notifier-*","timeFieldName":"@timestamp"}}'
+   ```
+
+4. Open **Discover** — structured slog lines appear with `level`, `msg`,
+   `container.name` (and slog attrs like `component`/`repo` where set) as
+   fields, and the event time as `@timestamp`; Gin access lines arrive as
+   raw text in `message`. Try an aggregation (e.g. a count split by
+   `level.keyword` over time) to confirm search and aggregation work.
+
+Metrics (Prometheus) and dashboards (Grafana) are a separate, later
+slice — see below.
+
+---
+
 ## What's intentionally not here
 
 A handful of bonus items from the spec I didn't implement:

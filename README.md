@@ -358,14 +358,12 @@ See `docs/testing/` for per-suite detail.
 The app emits structured `slog` JSON to stdout (`LOG_FORMAT=json`). A **Filebeat**
 sidecar tails the app container's Docker log files, parses the JSON, and ships it
 to **Elasticsearch**; **Kibana** provides search and aggregation. The app stays
-decoupled — no ES client, no ES dependency. Filebeat reads the on-disk log files
-with a position registry, so it survives restarts and never silently drops logs.
-See ADR-010 for the pipeline decision (and why the push-driver alternative was
-reverted).
+decoupled — no ES client, no ES dependency. See ADR-010 for the pipeline decision
+(and why the push-driver alternative was reverted).
 
-The stack lives in its own compose file. This one command starts **all
-containers** — app, Postgres, Redis, Elasticsearch, Kibana and Filebeat —
-combined into one project so they share a network:
+The stack lives in its own compose file. One command starts **all containers** —
+app, Postgres, Redis, Elasticsearch, Kibana, Filebeat, Prometheus and Grafana —
+in a single shared-network project:
 
 ```
 docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build -d
@@ -401,29 +399,22 @@ Local/dev posture only: ES security and TLS are disabled — do not expose.
      -d '{"data_view":{"title":"repo-release-notifier-*","timeFieldName":"@timestamp"}}'
    ```
 
-4. Open **Discover** — structured slog lines appear with `level`, `msg`,
-   `container.name` (and slog attrs like `component`/`repo` where set) as
-   fields, and the event time as `@timestamp`; Gin access lines arrive as
-   raw text in `message`. Try an aggregation (e.g. a count split by
-   `level.keyword` over time) to confirm search and aggregation work.
+4. Open **Discover** — slog lines appear with `level`, `msg`, `container.name`
+   (and attrs like `component`/`repo`) as fields, timed by `@timestamp`; Gin
+   access lines arrive as raw text in `message`. Aggregate (e.g. count by
+   `level.keyword` over time) to confirm search works.
 
-Metrics (Prometheus) and dashboards (Grafana) are a separate, later
-slice — see below.
+The same overlay also starts **Prometheus** (scraping `/metrics`) and **Grafana**
+with a provisioned RED dashboard at <http://localhost:3000> — see ADR-011.
 
 ---
 
 ## What's intentionally not here
 
-A handful of bonus items from the spec I didn't implement:
+Bonus items from the spec I didn't implement:
 
-- **Prometheus `/metrics`.** Trivial to add (`promhttp.Handler`
-  behind a middleware) but without a scraping target there's
-  nowhere for the data to go. Env vars are reserved.
 - **Deployment.** No hosting wired up. `docker-compose.yml` gets
   you the full stack locally.
-- **Structured logging (`slog`).** The service uses `log.Printf`.
-  Worth migrating if this ever went into an environment with a
-  log aggregator; for now it's noise for no gain.
 
 Schema changes go through versioned, forward-only SQL migrations
 under `internal/db/migrations/` (golang-migrate), applied on

@@ -85,4 +85,3 @@ string → object) needs a fresh, Filebeat-owned index.
 
 - ADR-009 (structured logging), ADR-007 (layering)
 - Filebeat: <https://www.elastic.co/guide/en/beats/filebeat/current/index.html>
-- spec: `docs/superpowers/specs/2026-05-29-elasticsearch-kibana-logging-design.md`

@@ -39,3 +39,5 @@ go.work.sum
 # Local Claude configuration
 .claude/
 CLAUDE.md
+.agents/
+skills-lock.json

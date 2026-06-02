@@ -9,7 +9,7 @@ import (
 
 func NewRouter(h *Handler, apiKey string) *gin.Engine {
 	router := gin.New()
-	router.Use(MetricsMiddleware(), gin.Recovery())
+	router.Use(MetricsMiddleware(), gin.Logger(), gin.Recovery())
 	registerRoutes(router, h, apiKey)
 	return router
 }
@@ -25,6 +25,7 @@ func registerRoutes(router *gin.Engine, h *Handler, apiKey string) {
 
 	apiGroup := router.Group("/api")
 	{
+		// Token-in-URL routes: opened from mail clients, no API key.
 		apiGroup.GET("/confirm/:token", h.ConfirmSubscription)
 		apiGroup.GET("/unsubscribe/:token", h.Unsubscribe)
 		apiGroup.POST("/unsubscribe/:token", h.Unsubscribe)

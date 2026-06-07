@@ -39,11 +39,6 @@ type TokenRepo interface {
 	DeleteToken(ctx context.Context, id uint) error
 }
 
-type SubscriptionRepository interface {
-	SubscriptionRepo
-	TokenRepo
-}
-
 type RepoValidator interface {
 	ValidateRepo(ctx context.Context, owner, repo string) error
 }
@@ -52,11 +47,8 @@ type ConfirmationSender interface {
 	SendConfirmation(ctx context.Context, email, repo, token, unsubscribeToken string) error
 }
 
-// TokenGenerator returns a fresh opaque token. Injectable so tests can
-// produce deterministic values without depending on the UUID library.
 type TokenGenerator func() (string, error)
 
-// RandomToken returns a v4 UUID (122 bits of entropy).
 func RandomToken() (string, error) {
 	u, err := uuid.NewRandom()
 	if err != nil {
@@ -74,7 +66,8 @@ type Service struct {
 }
 
 func New(
-	repo SubscriptionRepository,
+	subs SubscriptionRepo,
+	tokens TokenRepo,
 	github RepoValidator,
 	notifier ConfirmationSender,
 	newToken TokenGenerator,
@@ -83,8 +76,8 @@ func New(
 		newToken = RandomToken
 	}
 	return &Service{
-		subs:     repo,
-		tokens:   repo,
+		subs:     subs,
+		tokens:   tokens,
 		github:   github,
 		notifier: notifier,
 		newToken: newToken,

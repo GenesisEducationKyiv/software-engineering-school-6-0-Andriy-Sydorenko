@@ -87,11 +87,16 @@ make test    # unit, then integration, then e2e
 ## CI
 
 Each suite has its own GitHub Actions workflow so failures don't
-cross pipelines:
+cross pipelines. CI runs the underlying `go test` invocations inline
+(not the `make` wrappers) so the command and its flags are visible in
+the run logs:
 
-| Workflow                                  | Purpose |
+| Workflow                                  | Runs |
 |-------------------------------------------|---|
-| `.github/workflows/unit-tests.yml`        | `make test-unit` |
-| `.github/workflows/integration-tests.yml` | `make test-integration` |
-| `.github/workflows/e2e-tests.yml`         | `make test-e2e` (Chromium pulled as a Docker image) |
+| `.github/workflows/unit-tests.yml`        | `go test ./... -race -count=1` |
+| `.github/workflows/integration-tests.yml` | `go test -tags=integration -timeout=2m -count=1 ./tests/integration/...` |
+| `.github/workflows/e2e-tests.yml`         | `go test -tags=e2e -count=1 -timeout=10m ./tests/e2e/...` (Chromium pulled as a Docker image) |
 | `.github/workflows/lint.yml`              | `golangci-lint` + `make verify-mocks` |
+
+The `make test-*` targets above are the local equivalents; CI's e2e
+timeout is wider (`10m` vs the local `5m`) to absorb first-run image pulls.

@@ -83,7 +83,8 @@ function — deferred until a wiring/scanner regression justifies the cost.
 **Positive**
 
 - Bugs fail in the layer that can debug them — stack trace (unit), HTTP body +
-  DB row (integration), Playwright trace + container logs (e2e).
+  DB row (integration), Playwright trace + container logs (e2e, written to
+  `tests/e2e/_artifacts/` on failure and uploaded as a CI artifact).
 - Default `go test ./...` stays under ~4s; the inner loop needs no Docker.
 - Production code carries only real seams (`GITHUB_API_URL`, `SMTP_HOST/PORT`
   are staging knobs); zero `if testing` branches in prod paths.

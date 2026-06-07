@@ -1,20 +1,16 @@
-// Package cache wraps Redis with the two primitives the project uses.
 package cache
 
 import (
 	"context"
 	"errors"
-	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// ErrMiss is returned from Get when the key is not present.
 var ErrMiss = errors.New("cache miss")
 
-// Config bundles cache knobs. URL wins when set; otherwise Host/Port/
-// Password/DB assemble one. Empty Host (with empty URL) means "no Redis".
 type Config struct {
 	URL      string
 	Host     string
@@ -23,7 +19,6 @@ type Config struct {
 	DB       string
 }
 
-// DSN returns the connection URL, or "" when no Redis is configured.
 func (c *Config) DSN() string {
 	if c.URL != "" {
 		return c.URL
@@ -31,11 +26,15 @@ func (c *Config) DSN() string {
 	if c.Host == "" {
 		return ""
 	}
-	auth := ""
-	if c.Password != "" {
-		auth = ":" + c.Password + "@"
+	u := url.URL{
+		Scheme: "redis",
+		Host:   c.Host + ":" + c.Port,
+		Path:   "/" + c.DB,
 	}
-	return fmt.Sprintf("redis://%s%s:%s/%s", auth, c.Host, c.Port, c.DB)
+	if c.Password != "" {
+		u.User = url.UserPassword("", c.Password)
+	}
+	return u.String()
 }
 
 type Redis struct {
@@ -58,7 +57,6 @@ func NewRedis(cfg *Config) (*Redis, error) {
 	return &Redis{client: client}, nil
 }
 
-// Get translates go-redis' redis.Nil into ErrMiss.
 func (r *Redis) Get(ctx context.Context, key string) (string, error) {
 	v, err := r.client.Get(ctx, key).Result()
 	if errors.Is(err, redis.Nil) {

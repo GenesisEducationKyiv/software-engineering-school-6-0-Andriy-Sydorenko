@@ -1,7 +1,5 @@
 //go:build e2e
 
-// Package harness boots an in-process app instance against ephemeral
-// Postgres + Mailpit containers, for use by e2e tests.
 package harness
 
 import (
@@ -30,25 +28,20 @@ import (
 )
 
 const (
-	// DefaultAPIKey is the value tests opt into when they want the API-key
-	// middleware actually enforced (Options.APIKey). Default is empty, which
-	// makes the middleware bypass — matches the unprotected dev/staging path.
 	DefaultAPIKey     = "test-key"
 	pgImage           = "postgres:16-alpine"
 	mailpitImage      = "axllent/mailpit:v1.20"
 	containerStartTTL = 90 * time.Second
 )
 
-// Harness holds the live app + its dependencies and exposes the URLs tests
-// need. All cleanup is registered via t.Cleanup.
 type Harness struct {
-	BaseURL        string // app under test, reachable from the host (127.0.0.1)
-	BrowserBaseURL string // same app, reachable from inside the browser container
-	BrowserWSURL   string // CDP websocket endpoint for ConnectOverCDP
-	MailpitURL     string // Mailpit HTTP API root (http://host:port)
+	BaseURL        string
+	BrowserBaseURL string
+	BrowserWSURL   string
+	MailpitURL     string
 	APIKey         string
 	DB             *gorm.DB
-	GitHub         *GitHubFixture // nil when Options.GHValidator overrides it
+	GitHub         *GitHubFixture
 
 	pgC      testcontainers.Container
 	mailC    testcontainers.Container
@@ -56,18 +49,9 @@ type Harness struct {
 	srv      *http.Server
 }
 
-// Options configures optional substitutions. Zero value = sensible defaults
-// (real GitHub client pointed at an in-process httptest fixture; see GitHub).
 type Options struct {
-	// GHValidator, when set, completely replaces the default GitHub
-	// fixture + real-client wiring. Tests that need the programmable
-	// fixture should leave this nil and use Harness.GitHub.SetBehavior.
 	GHValidator service.RepoValidator
-
-	// APIKey, when non-empty, enables the API-key middleware on protected
-	// routes. Default empty = middleware bypasses (matches unprotected
-	// dev/staging behavior and lets browser-form tests work).
-	APIKey string
+	APIKey      string
 }
 
 // New boots Postgres + Mailpit containers and a fresh in-process app,
@@ -125,7 +109,7 @@ func New(t *testing.T, opts ...Options) *Harness {
 			BaseURL:  baseURL,
 		},
 	)
-	svc := service.New(repo, gh, note, service.RandomToken)
+	svc := service.New(repo, repo, gh, note, service.RandomToken)
 	router := api.NewRouter(api.NewHandler(svc), o.APIKey)
 
 	srv := &http.Server{
@@ -136,8 +120,6 @@ func New(t *testing.T, opts ...Options) *Harness {
 		IdleTimeout:       120 * time.Second,
 	}
 	go func() {
-		// log.Printf, not t.Logf: this goroutine can outlive the test (nothing
-		// joins it on shutdown), and t.Logf after the test finishes panics.
 		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("harness http server: %v", err)
 		}
@@ -161,14 +143,11 @@ func New(t *testing.T, opts ...Options) *Harness {
 	return h
 }
 
-// TruncateDB clears subscription rows between tests. Test suites that share a
-// Harness should call this in SetupTest.
 func (h *Harness) TruncateDB(t *testing.T) {
 	t.Helper()
 	require.NoError(t, h.DB.Exec("TRUNCATE TABLE subscriptions RESTART IDENTITY CASCADE").Error)
 }
 
-// ResetMailpit deletes all captured messages from Mailpit.
 func (h *Harness) ResetMailpit(t *testing.T) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodDelete, h.MailpitURL+"/api/v1/messages", nil)
@@ -220,8 +199,6 @@ func startMailpit(t *testing.T, ctx context.Context) (testcontainers.Container, 
 		Image:        mailpitImage,
 		ExposedPorts: []string{"1025/tcp", "8025/tcp"},
 		Env: map[string]string{
-			// Make Mailpit advertise SMTP AUTH and accept any creds; the real
-			// mailer always sends PLAIN auth and net/smtp errors if unsupported.
 			"MP_SMTP_AUTH_ACCEPT_ANY":     "true",
 			"MP_SMTP_AUTH_ALLOW_INSECURE": "true",
 		},

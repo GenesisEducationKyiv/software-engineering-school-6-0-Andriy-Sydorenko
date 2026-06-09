@@ -353,59 +353,42 @@ See `docs/testing/` for per-suite detail.
 
 ---
 
-## Observability: logs in Elasticsearch + Kibana
+## Observability: logs + metrics
 
 The app emits structured `slog` JSON to stdout (`LOG_FORMAT=json`). A **Filebeat**
-sidecar tails the app container's Docker log files, parses the JSON, and ships it
-to **Elasticsearch**; **Kibana** provides search and aggregation. The app stays
-decoupled — no ES client, no ES dependency. See ADR-010 for the pipeline decision
-(and why the push-driver alternative was reverted).
+sidecar tails the app's Docker logs, parses the JSON, and ships it to
+**Elasticsearch**; **Kibana** searches and aggregates. The app stays decoupled — no
+ES client. **Prometheus** scrapes `/metrics` and **Grafana** serves a provisioned RED
+dashboard. See ADR-009/010/011 for the decisions (including the reverted push driver).
 
-The stack lives in its own compose file. One command starts **all containers** —
-app, Postgres, Redis, Elasticsearch, Kibana, Filebeat, Prometheus and Grafana —
-in a single shared-network project:
+The whole stack lives in an overlay compose file; one command brings it up:
 
 ```
 docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build -d
 ```
 
-Tear everything down with `... down` (add `-v` to also wipe Elasticsearch data).
+`... down` tears it down (`-v` also drops every data volume, Postgres included).
 
-- App: <http://localhost:8080> (or your `PORT`)
-- Elasticsearch: <http://localhost:9200>
-- Kibana: <http://localhost:5601>
+- App <http://localhost:8080> · Elasticsearch <http://localhost:9200> ·
+  Kibana <http://localhost:5601> · Grafana <http://localhost:3000>
 
 Local/dev posture only: ES security and TLS are disabled — do not expose.
 
-### See the logs
+### See the logs in Kibana
 
-1. Generate activity (subscribe, or wait for a scanner tick).
-2. Confirm the daily index exists:
+Generate activity (subscribe, or wait for a scanner tick), then create the data view
+once — Kibana needs it before Discover shows anything:
 
-   ```
-   curl localhost:9200/_cat/indices/repo-release-notifier-*
-   ```
+```
+curl -X POST localhost:5601/api/data_views/data_view \
+  -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+  -d '{"data_view":{"title":"repo-release-notifier-*","timeFieldName":"@timestamp"}}'
+```
 
-3. Create the Kibana **data view** (one-time; Kibana needs it before it
-   can show anything). In Kibana → **Stack Management → Data Views →
-   Create data view**, set the name/pattern to `repo-release-notifier-*`
-   and the time field to `@timestamp`.
-
-   Or script it against the Kibana API:
-
-   ```
-   curl -X POST localhost:5601/api/data_views/data_view \
-     -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
-     -d '{"data_view":{"title":"repo-release-notifier-*","timeFieldName":"@timestamp"}}'
-   ```
-
-4. Open **Discover** — slog lines appear with `level`, `msg`, `container.name`
-   (and attrs like `component`/`repo`) as fields, timed by `@timestamp`; Gin
-   access lines arrive as raw text in `message`. Aggregate (e.g. count by
-   `level.keyword` over time) to confirm search works.
-
-The same overlay also starts **Prometheus** (scraping `/metrics`) and **Grafana**
-with a provisioned RED dashboard at <http://localhost:3000> — see ADR-011.
+(Or Kibana → **Stack Management → Data Views → Create**, pattern
+`repo-release-notifier-*`, time field `@timestamp`.) Open **Discover** — every line is
+structured slog JSON: `level`, `msg`, `container.name`, plus attrs like `route`,
+`status`, `duration_ms` (HTTP access logs) or `repo`, `err` (app events).
 
 ---
 

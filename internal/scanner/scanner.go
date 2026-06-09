@@ -193,8 +193,7 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 			tag,
 			sub.UnsubscribeToken,
 		); err != nil {
-			// sub.ID is logged in place of sub.Email — email is PII per
-			// the project's security rules.
+			// sub.ID is logged in place of sub.Email — email is PII
 			slog.ErrorContext(
 				ctx, "scanner: failed to send release notification",
 				"id", sub.ID,

@@ -136,9 +136,8 @@ func (s *Service) Subscribe(ctx context.Context, req domain.SubscribeRequest) er
 		confirmToken,
 		unsubToken,
 	); err != nil {
-		// Persist-then-send: the row is the durable commitment; SMTP is
-		// best-effort and surfaced via log alerting, not 5xx fan-out.
-		slog.ErrorContext(ctx, "failed to send confirmation email",
+		slog.ErrorContext(
+			ctx, "failed to send confirmation email",
 			"repo", req.Repo,
 			"err", err,
 		)
@@ -165,7 +164,8 @@ func (s *Service) ConfirmSubscription(ctx context.Context, tokenValue string) er
 	}
 
 	if err := s.tokens.DeleteToken(ctx, token.ID); err != nil {
-		slog.WarnContext(ctx, "failed to delete used confirmation token",
+		slog.WarnContext(
+			ctx, "failed to delete used confirmation token",
 			"id", token.ID,
 			"err", err,
 		)

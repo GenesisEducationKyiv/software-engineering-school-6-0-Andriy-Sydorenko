@@ -22,9 +22,6 @@ const (
 	FormatText Format = "text"
 )
 
-// Config holds validated logging settings. The env layer (internal/config)
-// reads strings and casts to Level/Format; translation to slog primitives
-// happens here in slogLevel() and in New().
 type Config struct {
 	Level  Level
 	Format Format
@@ -45,8 +42,6 @@ func (c Config) Validate() error {
 }
 
 // AddSource reports whether the logger should include caller file:line.
-// Tied to level: turning on debug implies the operator wants pinpoint
-// traces; lower levels stay terse and skip the runtime.Caller cost.
 func (c Config) AddSource() bool {
 	return c.Level == LevelDebug
 }

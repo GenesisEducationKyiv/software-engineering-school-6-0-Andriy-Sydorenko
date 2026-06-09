@@ -8,101 +8,69 @@ Accepted
 
 ## Context
 
-ADR-009 gave the app structured logs; ADR-010 ships them to Elasticsearch for search and
-aggregation. Both are retrospective: they tell you what happened after the fact. What is
-missing is a real-time operational signal — request rate, error rate, and latency — that
-drives alerting and live dashboards without grepping logs. Logs cannot feed a
-`histogram_quantile` for p95 latency or a `rate()` panel for RPS without a bespoke
-aggregation pipeline. Prometheus metrics are the standard complement.
+ADR-009/010 give retrospective logs. Missing is a real-time operational signal —
+request rate, error rate, latency — to drive alerting and live dashboards. Logs can't
+feed `histogram_quantile` for p95 or `rate()` for RPS without a bespoke pipeline.
+Prometheus metrics are the standard complement.
 
 ---
 
 ## Decision
 
-Instrument the Gin HTTP app with a single histogram and expose it to Prometheus; visualize
-in Grafana provisioned as code alongside the existing observability compose overlay.
+Instrument the Gin app with a single histogram, expose it to Prometheus, and visualize
+in Grafana provisioned as code on the existing observability overlay.
 
-**Metric shape.** One histogram `http_request_duration_seconds` with labels `method`,
-`route`, and `status` covers all three RED signals:
+**Metric.** One histogram `http_request_duration_seconds{method,route,status}` covers
+all three RED signals:
 
 - **Rate** — `rate(http_request_duration_seconds_count[5m])`
 - **Errors** — same, filtered to `status=~"5.."`
-- **Duration** — `histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))`
+- **Duration** — `histogram_quantile(0.95, rate(..._bucket[5m]))`
 
-One metric, no separate counters or gauges to drift out of sync.
+One metric, no separate counters/gauges to drift out of sync.
 
-**Cardinality control.** The `route` label uses `c.FullPath()` — the Gin route template
-(e.g. `/api/confirm/:token`), not the raw request path. Requests that match no registered
-route (404s from unknown paths) are bucketed under a fixed label `"unmatched"` instead of
-their raw path, preventing unbounded cardinality from crawlers and scanners.
+**Cardinality.** The `route` label uses `c.FullPath()` (the route template, e.g.
+`/api/confirm/:token`), not the raw path; unmatched routes bucket under a fixed
+`"unmatched"`, and off-list HTTP verbs collapse to `"OTHER"` — both bound cardinality
+against crawlers.
 
-**Implementation.** A Gin middleware in `internal/api` wraps each handler, starts a timer,
-and records the observation after the handler returns. `promhttp.Handler()` is registered at
-`GET /metrics` in `router.go` before the API-key-protected group — the same posture as
-`/health`, which is also unauthenticated. One new direct dependency:
-`github.com/prometheus/client_golang`.
-
-**Deployment.** `prometheus` (`prom/prometheus`, scrapes `app:8080/metrics`) and `grafana`
-(`grafana/grafana`) are added to `docker-compose.observability.yml`, keeping the base
-compose unchanged. Grafana is provisioned as code under `deploy/grafana/provisioning/`:
-a datasource YAML pointing at Prometheus and a dashboard-provider YAML loading a
-hand-authored RED dashboard JSON. The dashboard survives `compose down -v` and is
-version-controlled.
+**Wiring.** A Gin middleware in `internal/api` times each request in a `defer`,
+recording the histogram and a structured slog access log with the same RED dimensions
+(so panic-recovered 500s land in both); it replaces `gin.Logger()`, whose plain text
+didn't fit the JSON log pipeline (ADR-010). `promhttp.Handler()` is at `GET /metrics`,
+unauthenticated like `/health`. Prometheus scrapes `app:8080`; Grafana loads a
+provisioned datasource + RED dashboard from `deploy/grafana/provisioning/`. Both run in
+`docker-compose.observability.yml`; the base compose is untouched. One new direct
+dependency: `github.com/prometheus/client_golang`.
 
 ---
 
 ## Consequences
 
-### Positive
-
-- Real-time rate, error, and latency signals with no aggregation pipeline; `histogram_quantile`
-  works across restarts and multiple instances (unlike summaries).
-- Single metric, single middleware — minimal instrumentation surface.
-- Grafana provisioned as code: reproducible, diff-able, no manual UI setup.
-- Observability overlay stays modular: base compose is unaffected.
-
-### Negative
-
-- `github.com/prometheus/client_golang` is a new direct dependency; the histogram allocates
-  one bucket slice per (method × route × status) series — small but fixed memory for each
-  unique label combination.
-- `/metrics` is unauthenticated; it exposes request rates and route shapes (acceptable in
-  dev/internal environments, but must be network-restricted before any public deployment).
-- Two additional containers (`prometheus`, `grafana`) added to the observability overlay,
-  increasing local resource use alongside the existing Elasticsearch + Kibana + Filebeat trio.
-- Hand-authored dashboard JSON requires manual updates when new routes are added.
+- **+** Real-time rate/error/latency with no aggregation pipeline; histograms aggregate
+  across instances and restarts (unlike summaries). Single metric + middleware. Grafana
+  as code: reproducible, survives `compose down -v`.
+- **−** New dep; `/metrics` is unauthenticated (exposes route shapes — network-restrict
+  before any public deploy); two more containers; the dashboard JSON needs manual edits
+  when routes change.
 
 ---
 
 ## Alternatives Considered
 
-### Separate counter + summary per RED signal
-
-A `http_requests_total` counter for rate/errors and a `http_request_duration_summary` for
-latency. Rejected: summaries compute quantiles client-side over a sliding window and
-**cannot be aggregated across instances**, so p95 across N replicas is meaningless. A
-histogram's buckets can be summed and fed to `histogram_quantile` on the Prometheus server.
-Three separate metrics also multiply the places where a label mismatch silently breaks a
-query.
-
-### Raw URL path as `route` label
-
-Use `c.Request.URL.Path` instead of `c.FullPath()` for richer per-path detail. Rejected:
-every unique token, UUID, or cursor in a path becomes a distinct label value; a handful of
-active users would produce thousands of series, violating Prometheus cardinality best
-practices and degrading TSDB performance.
-
-### Manual Grafana datasource and dashboard setup
-
-Document the click-through in a runbook. Rejected: not reproducible, not version-controlled,
-and lost on `compose down -v`. Provisioning as code is the direct parallel to how
-`filebeat.yml` is shipped for ADR-010.
+- **Counter + summary per signal.** Summaries compute quantiles client-side and **can't
+  aggregate across instances**, so p95 across replicas is meaningless; histograms sum on
+  the server. Three metrics also multiply label-mismatch bugs.
+- **Raw URL path as `route`.** Every token/UUID becomes a distinct series — thousands of
+  series from a few users. Rejected for cardinality.
+- **Manual Grafana setup.** Not reproducible, lost on `compose down -v`. Provisioning as
+  code parallels how `filebeat.yml` ships (ADR-010).
 
 ---
 
 ## References
 
-- ADR-009 (structured logging), ADR-010 (log shipping)
+- ADR-009 (logging), ADR-010 (log shipping)
 - Prometheus histograms: <https://prometheus.io/docs/practices/histograms/>
 - client_golang: <https://pkg.go.dev/github.com/prometheus/client_golang/prometheus>
 - Grafana provisioning: <https://grafana.com/docs/grafana/latest/administration/provisioning/>

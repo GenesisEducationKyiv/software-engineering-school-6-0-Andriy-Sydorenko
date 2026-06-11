@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/github"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/observability/logging"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/platform"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner"
 )
 
@@ -42,38 +42,38 @@ func LoadConfig() (*Config, error) {
 	cfg := &Config{
 		DB: database.Config{
 			URL:      os.Getenv("DATABASE_URL"),
-			Host:     getEnvOrDefault("DB_HOST", "localhost"),
-			Port:     getEnvOrDefault("DB_PORT", "5432"),
+			Host:     platform.GetOrDefault("DB_HOST", "localhost"),
+			Port:     platform.GetOrDefault("DB_PORT", "5432"),
 			User:     os.Getenv("DB_USER"),
 			Password: os.Getenv("DB_PASSWORD"),
 			Name:     os.Getenv("DB_NAME"),
-			SSLMode:  getEnvOrDefault("DB_SSLMODE", "disable"),
+			SSLMode:  platform.GetOrDefault("DB_SSLMODE", "disable"),
 		},
 		Redis: cache.Config{
 			URL:      os.Getenv("REDIS_URL"),
 			Host:     os.Getenv("REDIS_HOST"),
-			Port:     getEnvOrDefault("REDIS_PORT", "6379"),
+			Port:     platform.GetOrDefault("REDIS_PORT", "6379"),
 			Password: os.Getenv("REDIS_PASSWORD"),
-			DB:       getEnvOrDefault("REDIS_DB", "0"),
+			DB:       platform.GetOrDefault("REDIS_DB", "0"),
 		},
 		SMTP: notifier.Config{
 			Host:     os.Getenv("SMTP_HOST"),
-			Port:     getEnvOrDefault("SMTP_PORT", "587"),
+			Port:     platform.GetOrDefault("SMTP_PORT", "587"),
 			Username: os.Getenv("SMTP_USERNAME"),
 			Password: os.Getenv("SMTP_PASSWORD"),
-			BaseURL:  getEnvOrDefault("BASE_URL", "http://localhost:8080"),
+			BaseURL:  platform.GetOrDefault("BASE_URL", "http://localhost:8080"),
 		},
 		Scanner: loadScannerConfig(),
 		GitHub: github.Config{
 			Token:   os.Getenv("GITHUB_TOKEN"),
-			Timeout: getEnvDuration("GITHUB_TIMEOUT", 10*time.Second),
+			Timeout: platform.GetDuration("GITHUB_TIMEOUT", 10*time.Second),
 			BaseURL: os.Getenv("GITHUB_API_URL"),
 		},
 		Log: logging.Config{
-			Level:  logging.Level(strings.ToLower(getEnvOrDefault("LOG_LEVEL", "info"))),
-			Format: logging.Format(strings.ToLower(getEnvOrDefault("LOG_FORMAT", "text"))),
+			Level:  logging.Level(strings.ToLower(platform.GetOrDefault("LOG_LEVEL", "info"))),
+			Format: logging.Format(strings.ToLower(platform.GetOrDefault("LOG_FORMAT", "text"))),
 		},
-		Port:   getEnvOrDefault("PORT", "8080"),
+		Port:   platform.GetOrDefault("PORT", "8080"),
 		APIKey: os.Getenv("API_KEY"),
 	}
 
@@ -86,12 +86,12 @@ func LoadConfig() (*Config, error) {
 // loadScannerConfig panics on malformed env: config is a system
 // boundary and an operator typo must not silently flip behavior.
 func loadScannerConfig() scanner.Config {
-	concurrency := getEnvInt("SCAN_CONCURRENCY", 8)
+	concurrency := platform.GetInt("SCAN_CONCURRENCY", 8)
 	if concurrency < 1 {
 		panic(fmt.Sprintf("config: SCAN_CONCURRENCY must be >= 1, got %d", concurrency))
 	}
 	return scanner.Config{
-		Interval:    getEnvDuration("SCAN_INTERVAL", 5*time.Minute),
+		Interval:    platform.GetDuration("SCAN_INTERVAL", 5*time.Minute),
 		Concurrency: concurrency,
 	}
 }
@@ -107,40 +107,4 @@ func (c *Config) validate() error {
 		return err
 	}
 	return nil
-}
-
-func getEnvOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-// getEnvDuration parses a duration env var, falling back when unset.
-// A malformed value panics: the operator set something on purpose and
-// got the format wrong; silently using the default would hide the bug.
-func getEnvDuration(key string, fallback time.Duration) time.Duration {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		panic(fmt.Sprintf("config: invalid %s %q: %v", key, v, err))
-	}
-	return d
-}
-
-// getEnvInt parses an int env var, falling back when unset. Malformed
-// values panic — see getEnvDuration for the rationale.
-func getEnvInt(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		panic(fmt.Sprintf("config: invalid %s %q: %v", key, v, err))
-	}
-	return n
 }

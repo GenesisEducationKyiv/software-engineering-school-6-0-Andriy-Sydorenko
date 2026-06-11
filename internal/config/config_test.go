@@ -10,47 +10,6 @@ import (
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/observability/logging"
 )
 
-func TestGetEnvOrDefault(t *testing.T) {
-	t.Setenv("X_TEST_KEY", "")
-	assert.Equal(t, "fallback", getEnvOrDefault("X_TEST_KEY", "fallback"))
-
-	t.Setenv("X_TEST_KEY", "explicit")
-	assert.Equal(t, "explicit", getEnvOrDefault("X_TEST_KEY", "fallback"))
-}
-
-func TestGetEnvDuration(t *testing.T) {
-	t.Setenv("X_DUR", "")
-	assert.Equal(t, 5*time.Second, getEnvDuration("X_DUR", 5*time.Second))
-
-	t.Setenv("X_DUR", "2m30s")
-	assert.Equal(t, 2*time.Minute+30*time.Second, getEnvDuration("X_DUR", time.Second))
-}
-
-func TestGetEnvDurationPanicsOnInvalid(t *testing.T) {
-	t.Setenv("X_DUR_BAD", "not-a-duration")
-
-	// Panic must mention the env key — operator's only signal to find the typo.
-	defer func() {
-		r := recover()
-		require.NotNil(t, r, "expected panic on malformed duration")
-		assert.Contains(t, r.(string), "X_DUR_BAD")
-	}()
-	_ = getEnvDuration("X_DUR_BAD", time.Second)
-}
-
-func TestGetEnvIntFallbackAndParse(t *testing.T) {
-	t.Setenv("X_INT", "")
-	assert.Equal(t, 42, getEnvInt("X_INT", 42))
-
-	t.Setenv("X_INT", "17")
-	assert.Equal(t, 17, getEnvInt("X_INT", 1))
-}
-
-func TestGetEnvIntPanicsOnInvalid(t *testing.T) {
-	t.Setenv("X_INT_BAD", "abc")
-	assert.Panics(t, func() { _ = getEnvInt("X_INT_BAD", 1) })
-}
-
 func TestLoadScannerConfigDefaults(t *testing.T) {
 	t.Setenv("SCAN_INTERVAL", "")
 	t.Setenv("SCAN_CONCURRENCY", "")

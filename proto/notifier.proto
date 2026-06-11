@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package notifier.v1;
+
+option go_package = "github.com/Andriy-Sydorenko/repo-release-notifier/proto/gen/notifierpb;notifierpb";
+
+service NotifierService {
+  rpc SendConfirmation(SendConfirmationRequest) returns (SendAck);
+  rpc SendReleaseNotifications(SendReleaseNotificationsRequest) returns (SendAck);
+}
+
+message SendConfirmationRequest {
+  string email = 1;
+  string repo = 2;
+  string confirm_token = 3;
+  string unsubscribe_token = 4;
+}
+
+// One detected release → fan out to all confirmed subscribers in a single call.
+message SendReleaseNotificationsRequest {
+  string repo = 1;
+  string tag = 2;
+  string notes_url = 3;
+  repeated Recipient recipients = 4;
+}
+
+message Recipient {
+  string email = 1;
+  string unsubscribe_token = 2;
+}
+
+message SendAck {
+  uint32 sent = 1;
+  uint32 failed = 2;
+}

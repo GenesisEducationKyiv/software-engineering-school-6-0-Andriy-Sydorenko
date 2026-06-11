@@ -1,4 +1,4 @@
-package api
+package observability
 
 import (
 	"log/slog"
@@ -20,6 +20,9 @@ var httpRequestDuration = promauto.NewHistogramVec(
 	[]string{"method", "route", "status"},
 )
 
+// MetricsMiddleware records per-request latency + status into Prometheus and
+// emits a structured access log. Gin-specific; lives in observability so the api
+// layer holds no metrics wiring.
 func MetricsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()

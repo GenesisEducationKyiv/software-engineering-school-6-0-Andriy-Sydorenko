@@ -19,8 +19,7 @@ import (
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/api"
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/db"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/repository"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/service"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
 )
 
 const testAPIKey = "test-api-key"
@@ -107,8 +106,8 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	gh := &stubGitHub{}
 	mailer := &stubMailer{}
-	repo := repository.New(db)
-	svc := service.New(repo, repo, gh, mailer, service.RandomToken)
+	repo := subscription.NewRepository(db)
+	svc := subscription.New(repo, gh, mailer, subscription.RandomToken)
 	router := api.NewRouter(api.NewHandler(svc), testAPIKey)
 
 	return &testEnv{
@@ -191,7 +190,7 @@ func openWithRetry(dsn string, attempts int, delay time.Duration) (*gorm.DB, err
 
 func truncateAll(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	if err := db.Exec(`TRUNCATE TABLE confirmation_tokens, subscriptions RESTART IDENTITY CASCADE`).Error; err != nil {
+	if err := db.Exec(`TRUNCATE TABLE confirmation_tokens, subscriptions, watched_repo RESTART IDENTITY CASCADE`).Error; err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }

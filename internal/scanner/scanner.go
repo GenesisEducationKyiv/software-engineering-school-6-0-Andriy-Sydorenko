@@ -9,15 +9,27 @@ import (
 	"time"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
 )
 
-type Repository interface {
-	FindDistinctConfirmedRepos(ctx context.Context) ([]string, error)
-	FindConfirmedSubscriptionsByRepo(ctx context.Context, repo string) (
-		[]domain.Subscription,
-		error,
-	)
-	UpdateLastSeenTag(ctx context.Context, id uint, tag string) error
+// SubscriberLister is the subscription module's scan-path surface, consumed
+// through its public interface (satisfied by subscription.API).
+type SubscriberLister interface {
+	ListConfirmedRepos(ctx context.Context) ([]string, error)
+	ListConfirmedSubscribers(ctx context.Context, repo string) ([]subscription.Subscriber, error)
+}
+
+// WatchedRepoStore is the per-repo release-detection state port, satisfied by
+// *Repository (watched_repo table).
+type WatchedRepoStore interface {
+	GetLastSeenTag(ctx context.Context, repo string) (tag string, found bool, err error)
+	UpsertLastSeenTag(ctx context.Context, repo, tag string) error
+}
+
+// RepoValidator is the GitHub-boundary port backing the scanner's public
+// ValidateRepo. Satisfied by the github client.
+type RepoValidator interface {
+	ValidateRepo(ctx context.Context, owner, repo string) error
 }
 
 type ReleaseFetcher interface {
@@ -28,8 +40,8 @@ type ReleaseNotifier interface {
 	SendReleaseNotification(ctx context.Context, email, repo, tag, unsubscribeToken string) error
 }
 
-// Config bundles scanner knobs. The per-GitHub-call deadline lives on
-// the GitHub client, not here.
+// Config bundles scanner knobs. The per-GitHub-call deadline lives on the
+// GitHub client, not here.
 type Config struct {
 	Interval    time.Duration // default 5m
 	Concurrency int           // default 8
@@ -45,27 +57,58 @@ func (c *Config) withDefaults() {
 }
 
 type Scanner struct {
-	repo     Repository
-	github   ReleaseFetcher
-	notifier ReleaseNotifier
-	pool     *WorkerPool
-	cfg      Config
+	subs      SubscriberLister
+	store     WatchedRepoStore
+	github    ReleaseFetcher
+	notifier  ReleaseNotifier
+	validator RepoValidator
+	pool      *WorkerPool
+	cfg       Config
 }
 
 func New(
-	repo Repository,
+	subs SubscriberLister,
+	store WatchedRepoStore,
 	github ReleaseFetcher,
 	notifier ReleaseNotifier,
 	cfg *Config,
 ) *Scanner {
 	cfg.withDefaults()
 	return &Scanner{
-		repo:     repo,
+		subs:     subs,
+		store:    store,
 		github:   github,
 		notifier: notifier,
 		pool:     NewWorkerPool(cfg.Concurrency),
 		cfg:      *cfg,
 	}
+}
+
+// SetValidator injects the GitHub-boundary validator backing ValidateRepo.
+// Separate from New so the composition root can wire the github client (also the
+// ReleaseFetcher) without a circular constructor.
+func (s *Scanner) SetValidator(v RepoValidator) {
+	s.validator = v
+}
+
+// SetSubscribers injects the subscription module's scan-path reader. Set after
+// construction to break the subscription↔scanner construction cycle.
+func (s *Scanner) SetSubscribers(subs SubscriberLister) {
+	s.subs = subs
+}
+
+// ValidateRepo is the scanner module's public API: reports whether owner/repo
+// exists. A definitive "not found" is (false, nil); transport/rate-limit
+// failures propagate as a non-nil error.
+func (s *Scanner) ValidateRepo(ctx context.Context, owner, repo string) (bool, error) {
+	err := s.validator.ValidateRepo(ctx, owner, repo)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, domain.ErrRepoNotFound) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (s *Scanner) Run(ctx context.Context) {
@@ -80,8 +123,8 @@ func (s *Scanner) Run(ctx context.Context) {
 
 	s.runOnce(ctx)
 
-	// If a tick exceeds 0.8 × interval, drain the next pending tick so
-	// we don't immediately re-fire after a long run.
+	// If a tick exceeds 0.8 × interval, drain the next pending tick so we don't
+	// immediately re-fire after a long run.
 	budget := s.cfg.Interval * 8 / 10
 
 	for {
@@ -108,7 +151,7 @@ func (s *Scanner) Run(ctx context.Context) {
 }
 
 func (s *Scanner) runOnce(ctx context.Context) {
-	repos, err := s.repo.FindDistinctConfirmedRepos(ctx)
+	repos, err := s.subs.ListConfirmedRepos(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "scanner: failed to list repos", "err", err)
 		return
@@ -136,9 +179,13 @@ func (s *Scanner) runOnce(ctx context.Context) {
 	)
 }
 
-// safeCheckRepo recovers from panics so one bad repo doesn't tear down
-// the worker pool. The panic is logged once here and the caller sees nil
-// — it's a terminal event for that repo, not a propagatable error.
+// RunOnceForTest runs a single scan cycle. Exported only for integration tests
+// that drive a real DB-backed cycle without the ticker loop.
+func (s *Scanner) RunOnceForTest(ctx context.Context) { s.runOnce(ctx) }
+
+// safeCheckRepo recovers from panics so one bad repo doesn't tear down the
+// worker pool. The panic is logged once here and the caller sees nil — it's a
+// terminal event for that repo, not a propagatable error.
 func (s *Scanner) safeCheckRepo(ctx context.Context, repo string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -164,39 +211,45 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		return nil
 	}
 
-	subs, err := s.repo.FindConfirmedSubscriptionsByRepo(ctx, repo)
+	lastSeen, found, err := s.store.GetLastSeenTag(ctx, repo)
+	if err != nil {
+		return err
+	}
+	if found && tag == lastSeen {
+		return nil // already notified for this tag
+	}
+
+	// First sighting: record the tag and send nothing, so existing releases
+	// don't spam every confirmed subscriber on the first scan (spec §9).
+	if !found {
+		if err := s.store.UpsertLastSeenTag(ctx, repo, tag); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	subs, err := s.subs.ListConfirmedSubscribers(ctx, repo)
 	if err != nil {
 		return err
 	}
 
+	// Persist before notifying: a failed upsert would re-fire next scan, so gate
+	// the whole fan-out on it.
+	if err := s.store.UpsertLastSeenTag(ctx, repo, tag); err != nil {
+		return err
+	}
+
 	for i := range subs {
-		sub := &subs[i]
-		if !sub.IsNewTag(tag) {
-			continue
-		}
-		previous := sub.LastSeenTag
-		if err := s.repo.UpdateLastSeenTag(ctx, sub.ID, tag); err != nil {
-			slog.ErrorContext(
-				ctx, "scanner: failed to update last_seen_tag",
-				"id", sub.ID,
-				"err", err,
-			)
-			continue
-		}
-		if previous == "" {
-			continue
-		}
+		sub := subs[i]
 		if err := s.notifier.SendReleaseNotification(
 			ctx,
 			sub.Email,
-			sub.Repo,
+			repo,
 			tag,
 			sub.UnsubscribeToken,
 		); err != nil {
-			// sub.ID is logged in place of sub.Email — email is PII
 			slog.ErrorContext(
 				ctx, "scanner: failed to send release notification",
-				"id", sub.ID,
 				"repo", repo,
 				"tag", tag,
 				"err", err,

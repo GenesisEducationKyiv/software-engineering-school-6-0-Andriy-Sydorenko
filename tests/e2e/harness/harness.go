@@ -23,8 +23,7 @@ import (
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/db"
 	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/github"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/repository"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/service"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
 )
 
 const (
@@ -50,7 +49,7 @@ type Harness struct {
 }
 
 type Options struct {
-	GHValidator service.RepoValidator
+	GHValidator subscription.RepoValidator
 	APIKey      string
 }
 
@@ -99,7 +98,7 @@ func New(t *testing.T, opts ...Options) *Harness {
 		)
 	}
 
-	repo := repository.New(db)
+	repo := subscription.NewRepository(db)
 	note := notifier.New(
 		&notifier.Config{
 			Host:     smtpAddr.host,
@@ -109,7 +108,7 @@ func New(t *testing.T, opts ...Options) *Harness {
 			BaseURL:  baseURL,
 		},
 	)
-	svc := service.New(repo, repo, gh, note, service.RandomToken)
+	svc := subscription.New(repo, gh, note, subscription.RandomToken)
 	router := api.NewRouter(api.NewHandler(svc), o.APIKey)
 
 	srv := &http.Server{

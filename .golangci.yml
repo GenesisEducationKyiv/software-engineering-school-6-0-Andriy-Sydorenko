@@ -74,7 +74,7 @@ linters:
       - path: _test\.go
         linters:
           - gosec
-      - path: internal/observability/logging/text_handler
+      - path: internal/observability/logging/.*_handler
         linters:
           - gocritic
         text: hugeParam

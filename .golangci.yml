@@ -34,6 +34,9 @@ linters:
     # Performance
     - prealloc
 
+    # Imports / module boundaries
+    - depguard
+
   settings:
     cyclop:
       max-complexity: 15
@@ -68,6 +71,21 @@ linters:
       exclude-functions:
         - (io.Closer).Close
         - (*net/http.Response).Body.Close
+    depguard:
+      rules:
+        subscription-no-scanner:
+          files:
+            - "**/internal/subscription/**"
+          deny:
+            - pkg: github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner
+              desc: "subscription must reach the scanner only via an injected interface, not by importing it"
+        modules-no-notifier-internals:
+          files:
+            - "**/internal/subscription/**"
+            - "**/internal/scanner/**"
+          deny:
+            - pkg: github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier
+              desc: "subscription/scanner must use the notifier port, not import internal/notifier"
 
   exclusions:
     rules:

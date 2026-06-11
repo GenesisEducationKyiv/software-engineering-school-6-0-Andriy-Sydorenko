@@ -1,4 +1,4 @@
-package api
+package observability_test
 
 import (
 	"net/http"
@@ -8,13 +8,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/observability"
 )
 
 // These tests share the global Prometheus registry, so never add t.Parallel().
 func TestMetricsSmoke(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(MetricsMiddleware())
+	r.Use(observability.MetricsMiddleware())
 	r.GET("/ping", func(c *gin.Context) { c.Status(http.StatusOK) })
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
@@ -34,7 +36,7 @@ func TestMetricsSmoke(t *testing.T) {
 func TestMetricsRecordsPanicsAndUnmatched(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(MetricsMiddleware(), gin.Recovery())
+	r.Use(observability.MetricsMiddleware(), gin.Recovery())
 	r.GET("/boom", func(c *gin.Context) { panic("kaboom") })
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
@@ -56,7 +58,7 @@ func TestMetricsRecordsPanicsAndUnmatched(t *testing.T) {
 func TestMetricsUnmatchedAndExplicit500(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(MetricsMiddleware())
+	r.Use(observability.MetricsMiddleware())
 	r.GET("/fail", func(c *gin.Context) { c.JSON(http.StatusInternalServerError, gin.H{}) })
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 

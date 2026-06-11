@@ -5,11 +5,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/observability"
 )
 
 func NewRouter(h *Handler, apiKey string) *gin.Engine {
 	router := gin.New()
-	router.Use(MetricsMiddleware(), gin.Recovery())
+	router.Use(observability.MetricsMiddleware(), gin.Recovery())
 	registerRoutes(router, h, apiKey)
 	return router
 }

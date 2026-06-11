@@ -15,12 +15,12 @@ import (
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/cache"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/config"
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/db"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
 	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/github"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/observability/logging"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/repository"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/service"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
 )
 
 func main() {
@@ -48,13 +48,21 @@ func run() error {
 		return fmt.Errorf("migrate: %w", err)
 	}
 
-	repo := repository.New(db)
-
 	gh, fetcher := buildGitHubClients(cfg)
-
 	note := notifier.New(&cfg.SMTP)
-	svc := service.New(repo, repo, gh, note, service.RandomToken)
-	scan := scanner.New(repo, fetcher, note, &cfg.Scanner)
+
+	// scanner owns watched_repo + the GitHub boundary (ValidateRepo + fetch).
+	scan := scanner.New(nil, scanner.NewRepository(db), fetcher, note, &cfg.Scanner)
+	scan.SetValidator(gh)
+
+	// subscription owns subscriptions + tokens; reaches the scanner only through
+	// the validator adapter (the public ValidateRepo, port-shaped).
+	subRepo := subscription.NewRepository(db)
+	svc := subscription.New(subRepo, scannerValidator{scan}, note, subscription.RandomToken)
+
+	// Close the bidirectional loop: the scanner's scan-path reads come from the
+	// subscription module's public API.
+	scan.SetSubscribers(svc)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -89,11 +97,27 @@ func run() error {
 	return nil
 }
 
-// buildGitHubClients returns validator and fetcher views of the
-// GitHub client, optionally wrapped in the Redis cache decorator.
-// Cache failure is non-fatal.
-// TODO: move and rewrite github client init
-func buildGitHubClients(cfg *config.Config) (service.RepoValidator, scanner.ReleaseFetcher) {
+// scannerValidator adapts the scanner's public ValidateRepo (bool, error) to the
+// subscription module's RepoValidator port (error). A "does not exist" becomes
+// ErrRepoNotFound; transport errors pass through.
+type scannerValidator struct {
+	scan *scanner.Scanner
+}
+
+func (a scannerValidator) ValidateRepo(ctx context.Context, owner, repo string) error {
+	ok, err := a.scan.ValidateRepo(ctx, owner, repo)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return domain.ErrRepoNotFound
+	}
+	return nil
+}
+
+// buildGitHubClients returns validator and fetcher views of the GitHub client,
+// optionally wrapped in the Redis cache decorator. Cache failure is non-fatal.
+func buildGitHubClients(cfg *config.Config) (scanner.RepoValidator, scanner.ReleaseFetcher) {
 	if cfg.Redis.DSN() == "" {
 		c := githubclient.NewClient(&cfg.GitHub)
 		return c, c

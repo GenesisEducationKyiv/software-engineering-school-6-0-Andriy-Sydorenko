@@ -13,76 +13,154 @@ import (
 	context "context"
 	reflect "reflect"
 
-	domain "github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
+	subscription "github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
 	gomock "go.uber.org/mock/gomock"
 )
 
-// MockRepository is a mock of Repository interface.
-type MockRepository struct {
+// MockSubscriberLister is a mock of SubscriberLister interface.
+type MockSubscriberLister struct {
 	ctrl     *gomock.Controller
-	recorder *MockRepositoryMockRecorder
+	recorder *MockSubscriberListerMockRecorder
 	isgomock struct{}
 }
 
-// MockRepositoryMockRecorder is the mock recorder for MockRepository.
-type MockRepositoryMockRecorder struct {
-	mock *MockRepository
+// MockSubscriberListerMockRecorder is the mock recorder for MockSubscriberLister.
+type MockSubscriberListerMockRecorder struct {
+	mock *MockSubscriberLister
 }
 
-// NewMockRepository creates a new mock instance.
-func NewMockRepository(ctrl *gomock.Controller) *MockRepository {
-	mock := &MockRepository{ctrl: ctrl}
-	mock.recorder = &MockRepositoryMockRecorder{mock}
+// NewMockSubscriberLister creates a new mock instance.
+func NewMockSubscriberLister(ctrl *gomock.Controller) *MockSubscriberLister {
+	mock := &MockSubscriberLister{ctrl: ctrl}
+	mock.recorder = &MockSubscriberListerMockRecorder{mock}
 	return mock
 }
 
 // EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockRepository) EXPECT() *MockRepositoryMockRecorder {
+func (m *MockSubscriberLister) EXPECT() *MockSubscriberListerMockRecorder {
 	return m.recorder
 }
 
-// FindConfirmedSubscriptionsByRepo mocks base method.
-func (m *MockRepository) FindConfirmedSubscriptionsByRepo(ctx context.Context, repo string) ([]domain.Subscription, error) {
+// ListConfirmedRepos mocks base method.
+func (m *MockSubscriberLister) ListConfirmedRepos(ctx context.Context) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindConfirmedSubscriptionsByRepo", ctx, repo)
-	ret0, _ := ret[0].([]domain.Subscription)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// FindConfirmedSubscriptionsByRepo indicates an expected call of FindConfirmedSubscriptionsByRepo.
-func (mr *MockRepositoryMockRecorder) FindConfirmedSubscriptionsByRepo(ctx, repo any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindConfirmedSubscriptionsByRepo", reflect.TypeOf((*MockRepository)(nil).FindConfirmedSubscriptionsByRepo), ctx, repo)
-}
-
-// FindDistinctConfirmedRepos mocks base method.
-func (m *MockRepository) FindDistinctConfirmedRepos(ctx context.Context) ([]string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindDistinctConfirmedRepos", ctx)
+	ret := m.ctrl.Call(m, "ListConfirmedRepos", ctx)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// FindDistinctConfirmedRepos indicates an expected call of FindDistinctConfirmedRepos.
-func (mr *MockRepositoryMockRecorder) FindDistinctConfirmedRepos(ctx any) *gomock.Call {
+// ListConfirmedRepos indicates an expected call of ListConfirmedRepos.
+func (mr *MockSubscriberListerMockRecorder) ListConfirmedRepos(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindDistinctConfirmedRepos", reflect.TypeOf((*MockRepository)(nil).FindDistinctConfirmedRepos), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListConfirmedRepos", reflect.TypeOf((*MockSubscriberLister)(nil).ListConfirmedRepos), ctx)
 }
 
-// UpdateLastSeenTag mocks base method.
-func (m *MockRepository) UpdateLastSeenTag(ctx context.Context, id uint, tag string) error {
+// ListConfirmedSubscribers mocks base method.
+func (m *MockSubscriberLister) ListConfirmedSubscribers(ctx context.Context, repo string) ([]subscription.Subscriber, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateLastSeenTag", ctx, id, tag)
+	ret := m.ctrl.Call(m, "ListConfirmedSubscribers", ctx, repo)
+	ret0, _ := ret[0].([]subscription.Subscriber)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListConfirmedSubscribers indicates an expected call of ListConfirmedSubscribers.
+func (mr *MockSubscriberListerMockRecorder) ListConfirmedSubscribers(ctx, repo any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListConfirmedSubscribers", reflect.TypeOf((*MockSubscriberLister)(nil).ListConfirmedSubscribers), ctx, repo)
+}
+
+// MockWatchedRepoStore is a mock of WatchedRepoStore interface.
+type MockWatchedRepoStore struct {
+	ctrl     *gomock.Controller
+	recorder *MockWatchedRepoStoreMockRecorder
+	isgomock struct{}
+}
+
+// MockWatchedRepoStoreMockRecorder is the mock recorder for MockWatchedRepoStore.
+type MockWatchedRepoStoreMockRecorder struct {
+	mock *MockWatchedRepoStore
+}
+
+// NewMockWatchedRepoStore creates a new mock instance.
+func NewMockWatchedRepoStore(ctrl *gomock.Controller) *MockWatchedRepoStore {
+	mock := &MockWatchedRepoStore{ctrl: ctrl}
+	mock.recorder = &MockWatchedRepoStoreMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockWatchedRepoStore) EXPECT() *MockWatchedRepoStoreMockRecorder {
+	return m.recorder
+}
+
+// GetLastSeenTag mocks base method.
+func (m *MockWatchedRepoStore) GetLastSeenTag(ctx context.Context, repo string) (string, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLastSeenTag", ctx, repo)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetLastSeenTag indicates an expected call of GetLastSeenTag.
+func (mr *MockWatchedRepoStoreMockRecorder) GetLastSeenTag(ctx, repo any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLastSeenTag", reflect.TypeOf((*MockWatchedRepoStore)(nil).GetLastSeenTag), ctx, repo)
+}
+
+// UpsertLastSeenTag mocks base method.
+func (m *MockWatchedRepoStore) UpsertLastSeenTag(ctx context.Context, repo, tag string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpsertLastSeenTag", ctx, repo, tag)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// UpdateLastSeenTag indicates an expected call of UpdateLastSeenTag.
-func (mr *MockRepositoryMockRecorder) UpdateLastSeenTag(ctx, id, tag any) *gomock.Call {
+// UpsertLastSeenTag indicates an expected call of UpsertLastSeenTag.
+func (mr *MockWatchedRepoStoreMockRecorder) UpsertLastSeenTag(ctx, repo, tag any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateLastSeenTag", reflect.TypeOf((*MockRepository)(nil).UpdateLastSeenTag), ctx, id, tag)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertLastSeenTag", reflect.TypeOf((*MockWatchedRepoStore)(nil).UpsertLastSeenTag), ctx, repo, tag)
+}
+
+// MockRepoValidator is a mock of RepoValidator interface.
+type MockRepoValidator struct {
+	ctrl     *gomock.Controller
+	recorder *MockRepoValidatorMockRecorder
+	isgomock struct{}
+}
+
+// MockRepoValidatorMockRecorder is the mock recorder for MockRepoValidator.
+type MockRepoValidatorMockRecorder struct {
+	mock *MockRepoValidator
+}
+
+// NewMockRepoValidator creates a new mock instance.
+func NewMockRepoValidator(ctrl *gomock.Controller) *MockRepoValidator {
+	mock := &MockRepoValidator{ctrl: ctrl}
+	mock.recorder = &MockRepoValidatorMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockRepoValidator) EXPECT() *MockRepoValidatorMockRecorder {
+	return m.recorder
+}
+
+// ValidateRepo mocks base method.
+func (m *MockRepoValidator) ValidateRepo(ctx context.Context, owner, repo string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ValidateRepo", ctx, owner, repo)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ValidateRepo indicates an expected call of ValidateRepo.
+func (mr *MockRepoValidatorMockRecorder) ValidateRepo(ctx, owner, repo any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ValidateRepo", reflect.TypeOf((*MockRepoValidator)(nil).ValidateRepo), ctx, owner, repo)
 }
 
 // MockReleaseFetcher is a mock of ReleaseFetcher interface.

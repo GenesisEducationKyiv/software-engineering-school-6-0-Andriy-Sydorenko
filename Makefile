@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-integration test-e2e build-check generate-mocks verify-mocks install-hooks
+.PHONY: test test-unit test-integration test-e2e build-check generate-mocks verify-mocks install-hooks proto
 
 # Compile every main package without producing artifact files.
 # Vets default + integration + e2e tagged code.
@@ -43,3 +43,19 @@ test-e2e:
 
 # All three suites, in order.
 test: test-unit test-integration test-e2e
+
+# Generate Go stubs from proto/*.proto. Builds the pinned codegen plugins
+# into ./bin (so we don't rely on $PATH or a system install), then runs the
+# already-installed protoc against them. Output lands under proto/gen/ via the
+# go_package option + --*_opt=module.
+PROTO_BIN := $(CURDIR)/bin
+proto:
+	@mkdir -p $(PROTO_BIN)
+	go build -o $(PROTO_BIN)/protoc-gen-go google.golang.org/protobuf/cmd/protoc-gen-go
+	go build -o $(PROTO_BIN)/protoc-gen-go-grpc google.golang.org/grpc/cmd/protoc-gen-go-grpc
+	protoc \
+	  --plugin=protoc-gen-go=$(PROTO_BIN)/protoc-gen-go \
+	  --plugin=protoc-gen-go-grpc=$(PROTO_BIN)/protoc-gen-go-grpc \
+	  --go_out=. --go_opt=module=github.com/Andriy-Sydorenko/repo-release-notifier \
+	  --go-grpc_out=. --go-grpc_opt=module=github.com/Andriy-Sydorenko/repo-release-notifier \
+	  proto/notifier.proto

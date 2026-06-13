@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-integration test-e2e build-check generate-mocks verify-mocks install-hooks proto bench
+.PHONY: test test-unit test-integration test-e2e build-check generate-mocks verify-mocks install-hooks proto bench bench-parallel
 
 # Compile every main package without producing artifact files.
 # Vets default + integration + e2e tagged code.
@@ -60,9 +60,22 @@ proto:
 	  --go-grpc_out=. --go-grpc_opt=module=github.com/Andriy-Sydorenko/repo-release-notifier \
 	  proto/notifier.proto
 
-# HTTP-API-vs-gRPC benchmark (star task). Runs every Benchmark* in bench/ with
-# allocation accounting; -run='^$$' skips the package's correctness Tests so only
-# benchmarks run. See bench/README.md for results + conclusions. For the
-# equivalence proof + wire-size table: go test -v ./bench/...
+# Shared formatter: Go prints no header row for benchmarks; this adds a labeled
+# one and folds the inline units into it. Used by `bench` and `bench-parallel`.
+# Propagates failure (exit c) since the pipe otherwise masks go test's exit code.
+BENCHFMT = awk 'BEGIN{f="%-60s %9s %13s %13s %13s\n"} /^(goos|goarch|pkg|cpu):/{print;next} /^Benchmark/{if(!h){printf f,"benchmark","runs","ns/op","B/op","allocs/op";h=1} printf f,$$1,$$2,$$3,$$5,$$7;next} {print} /FAIL|panic/{c=1} END{exit c}'
+
+# HTTP-API-vs-gRPC LATENCY benchmark (star task). One call at a time = per-call
+# latency. -run='^$$' skips the package's correctness Tests so only benchmarks run.
+# See bench/README.md for results + conclusions.
+# For raw, benchstat-parseable output use: go test -bench=. -benchmem -run='^$$' ./bench/...
+# For the equivalence proof + wire-size table: go test -v ./bench/...
 bench:
-	go test -bench=. -benchmem -run='^$$' ./bench/...
+	@go test -bench='_(gRPC|HTTP)$$' -benchmem -run='^$$' ./bench/... | $(BENCHFMT)
+
+# THROUGHPUT benchmark: same ops driven concurrently via b.RunParallel over the
+# SAME persistent client (one gRPC channel vs one HTTP pool) — the request-
+# efficiency / multiplexing test. -cpu sweeps the concurrency level (1, 8, 64
+# goroutines in flight). Throughput req/s = 1e9 / ns_op (lower ns/op = more req/s).
+bench-parallel:
+	@go test -bench='Parallel' -benchmem -run='^$$' -cpu=1,8,64 ./bench/... | $(BENCHFMT)

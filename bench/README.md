@@ -1,78 +1,204 @@
-# HTTP API vs gRPC — core↔notifier benchmark
+# gRPC vs HTTP/JSON — a benchmark you can actually read
 
-Benchmarks the one real network boundary in this design (core → notifier) over
-**both** transports, wrapping the **same** `notifier.Core` so transport is the
-only variable. gRPC is the runtime transport; the HTTP/JSON server here exists
-**only** to benchmark and document the comparison (spec §8).
+This folder measures **the one real network hop** in this app — the core service
+calling the notifier service to send emails — over **two different transports**:
 
-## What's measured
+- **gRPC** (Protobuf over HTTP/2) — the transport the app actually runs on.
+- **HTTP/JSON** (plain `net/http` + `encoding/json` over HTTP/1.1) — built **only**
+  for this benchmark, so we can compare the two fairly.
 
-Two operations, each over gRPC and over idiomatic HTTP/JSON:
+Both talk to the **exact same** business logic (`notifier.Core`) over the **same**
+fake email sender. So the only thing that ever differs between a "gRPC" number and
+an "HTTP" number is the transport. Any difference you see **is** the transport.
 
-| Operation | Workload | Story |
+---
+
+## TL;DR — the bottom line first
+
+> At this app's real scale, **the transport barely matters for speed.** gRPC was
+> chosen for its **typed contract and tooling**, not because it's dramatically
+> faster. The numbers below back that up — and show where each one actually wins.
+
+| Question | Winner | Why |
 |---|---|---|
-| `SendReleaseNotifications` | N = 1 / 100 / 1 000 / 10 000 recipients | payload / serialization scaling (growing `repeated` list) |
-| `SendConfirmation` | one tiny request/response | per-call overhead (framing, round-trip) |
+| Tiny request, one at a time (latency) | **HTTP** | gRPC's per-call machinery (HTTP/2 framing + interceptors) costs more when there's almost nothing to send |
+| Big request (100+ recipients), one at a time | **gRPC** (modest) | Protobuf serializes the big list faster/smaller than JSON |
+| Many tiny requests at once (high concurrency) | **gRPC** | gRPC multiplexes them all over **one** connection; HTTP/1.1 thrashes its connection pool and slows down |
+| Bytes on the wire | **gRPC** (always) | Protobuf is ~1.5× smaller than JSON at every size |
+| Easy to debug / universal / readable | **HTTP** | It's just text; `curl` works; every tool speaks it |
+| Typed contract, no drift between services | **gRPC** | The `.proto` file is the single source of truth; client/server code is generated |
 
-Metrics per benchmark: `ns/op`, `B/op`, `allocs/op` (from `testing.B`), plus the
-on-the-wire **serialized request size** in bytes (Protobuf vs JSON).
+---
 
-## How to run
+## Part 1 — The concepts (read this if any word below is fuzzy)
 
-```bash
-# Benchmarks only (ns/op · B/op · allocs/op):
-make bench
-#   └─ go test -bench=. -benchmem -run='^$' ./bench/...
+### What's a "recipient" vs a "request"?
 
-# Equivalence proof + the Protobuf-vs-JSON wire-size table:
-go test -v ./bench/...
+- A **recipient** = one person who gets an email (an address + an unsubscribe token).
+  It's **data**, not a network call.
+- A **request** = one network call from core → notifier ("please send this out").
+- **One request carries a *list* of recipients.** Sending a release to 100 people is
+  **1 request** containing **100 recipients** — not 100 requests.
 
-# Just the wire-size table:
-go test -run TestWireSize -v ./bench/...
+```
+ONE request  ─►  "Release v1.24.0 of golang/go is out. Email these 100 people:
+                  [recipient, recipient, … ×100]"
 ```
 
-For more stable numbers: `go test -bench=. -benchmem -run='^$' -benchtime=2s -count=5 ./bench/...`
-and compare with `benchstat`.
+This is identical for HTTP and gRPC. The **only** difference is how that one request
+(with its list) is packed into bytes:
 
-## Fairness / methodology (why this comparison is defensible)
+| | HTTP | gRPC |
+|---|---|---|
+| Encoding | JSON **text** — repeats `"email":`/`"unsubscribe_token":` for every recipient | Protobuf **binary** — tiny numeric tags instead of field names |
+| One recipient on the wire | `{"email":"a@x.com","unsubscribe_token":"…"}` | `0a 20 a@x.com 12 1c …` (binary, no field names) |
 
-- **Same Core, both transports.** Both servers wrap one `*notifier.Core` over a
-  no-op counting mailer — SMTP is stubbed, so we measure transport + (de)serialization,
-  **not** email sending.
-- **Provably equivalent behavior.** `TestTransportsEquivalent` asserts both
-  transports return the same `SendAck` (`sent`/`failed`) for identical input, at
-  every N. Any measured delta is therefore transport-only.
-- **Persistent connections both sides.** One gRPC channel (`platform.Dial`, dialed
-  once) and one keep-alive, pooled `*http.Client` — neither pays per-call
-  connection setup. HTTP compression is disabled so we compare raw JSON bytes.
-- **Auth enabled, symmetric.** The same bearer token is checked with a
-  constant-time compare on both sides (gRPC interceptor / HTTP middleware), so
-  auth cost is present and equal — not a thumb on the scale.
-- **Plaintext both sides** (no TLS), loopback `127.0.0.1`, one machine, one load
-  pattern (`testing.B`) — no `ghz`/`hey`/`k6` variance across tools.
-- **Identical, deterministic payloads** built once from shared builders; warm-up
-  before measurement; `b.ResetTimer()` after setup; `b.ReportAllocs()`.
+### `N` = how many recipients are in one request
 
-## Results — latency & allocations
+We test `N = 1, 100, 1000, 10000`. These are **stress-test sizes** to see how cost
+*scales*, not real traffic — this app realistically emails tens to a few hundred
+people per release. `N=1` exposes the cost of *making a call at all*; `N=10000`
+exposes the cost of *moving a big payload*.
 
-| op | N | transport | ns/op | B/op | allocs/op |
-|---|---|---|---|---|---|
-| SendConfirmation | 1 | gRPC | 88,272 | 19,485 | 259 |
-| SendConfirmation | 1 | HTTP | **59,940** | 18,297 | 191 |
-| SendReleaseNotifications | 1 | gRPC | 86,741 | 17,853 | 266 |
-| SendReleaseNotifications | 1 | HTTP | **59,825** | 17,066 | 200 |
-| SendReleaseNotifications | 100 | gRPC | **735,119** | 571,670 | 8,199 |
-| SendReleaseNotifications | 100 | HTTP | 815,490 | 624,097 | 7,959 |
-| SendReleaseNotifications | 1000 | gRPC | **6,010,080** | 6,460,907 | 80,265 |
-| SendReleaseNotifications | 1000 | HTTP | 6,841,479 | 5,914,160 | 78,211 |
-| SendReleaseNotifications | 10000 | gRPC | **59,242,665** | 55,742,801 | 800,542 |
-| SendReleaseNotifications | 10000 | HTTP | 61,003,463 | 57,953,563 | 780,319 |
+### Two ops being measured
 
-(Bold = faster transport for that row.)
+| Operation | What it is | What it isolates |
+|---|---|---|
+| `SendReleaseNotifications` | 1 request, a list of N recipients | **payload scaling** (the list grows) |
+| `SendConfirmation` | 1 request, 1 person | **per-call overhead** (payload removed) |
 
-## Results — on-the-wire request size
+### Latency vs Throughput — two different questions
 
-| op | N | protobuf (B) | json (B) | json/proto |
+- **Latency** ("how long does *one* request take?") → measured by `make bench`,
+  which fires requests **one at a time**.
+- **Throughput** ("how many requests/sec can it handle when *many* are in flight at
+  once?") → measured by `make bench-parallel`, which fires requests **concurrently**.
+
+These can disagree! A transport can have *worse* latency but *better* throughput.
+That's exactly what happens here, and it's the most interesting finding.
+
+### The four numbers in every result row
+
+```
+benchmark                               runs       ns/op       B/op     allocs/op
+BenchmarkSendReleaseNotifications_gRPC/N=100-10   1640   726905   571953   8199
+```
+
+| Column | Meaning | Better |
+|---|---|---|
+| **runs** | how many times Go ran it to average over ~1 second. Just bookkeeping — fast ops get more runs | — |
+| **ns/op** | **latency: nanoseconds per request** (1,000,000 ns = 1 ms). The headline number | lower |
+| **B/op** | memory allocated per request | lower |
+| **allocs/op** | number of separate memory allocations per request | lower |
+
+The `-10` / `-8` / `-64` suffix on the name = **how many requests were in flight at
+once** (the concurrency level). In `make bench` it's `-10` (your 10 CPU cores) but
+requests still run one-at-a-time. In `make bench-parallel` it's the real knob.
+
+**Handy conversion:** under the concurrent benchmark, **requests/sec = 1,000,000,000 ÷ ns/op**.
+Lower ns/op = more requests/sec.
+
+---
+
+## Part 2 — How to run it
+
+```bash
+# LATENCY — one request at a time:
+make bench
+
+# THROUGHPUT — many requests at once, swept across 1 / 8 / 64 concurrent:
+make bench-parallel
+
+# Proof both transports return identical results + the wire-size table:
+go test -v ./bench/...
+```
+
+For numbers stable enough to quote, average several runs:
+
+```bash
+go test -bench=. -benchmem -run='^$' -benchtime=2s -count=5 ./bench/... | benchstat -
+```
+
+---
+
+## Part 3 — Results: LATENCY (one request at a time)
+
+`make bench` — lower ns/op is faster.
+
+| Operation | N (recipients) | gRPC (ns/op) | HTTP (ns/op) | Winner |
+|---|---|---|---|---|
+| SendConfirmation | 1 | 87,176 (~87 µs) | **67,131 (~67 µs)** | **HTTP** ~30% faster |
+| SendReleaseNotifications | 1 | 85,342 (~85 µs) | **58,200 (~58 µs)** | **HTTP** ~32% faster |
+| SendReleaseNotifications | 100 | **726,905 (~0.73 ms)** | 809,134 (~0.81 ms) | **gRPC** ~11% faster |
+| SendReleaseNotifications | 1000 | **5,989,950 (~6.0 ms)** | 6,819,753 (~6.8 ms) | **gRPC** ~12% faster |
+| SendReleaseNotifications | 10000 | **57,606,196 (~57.6 ms)** | 61,431,393 (~61.4 ms) | **gRPC** ~6% faster |
+
+**What this says, in plain terms:**
+
+- **For tiny requests, HTTP is faster.** When the payload is tiny, the cost is just
+  "make a call." gRPC's HTTP/2 framing + its interceptor chain (auth, logging,
+  metrics, recovery) + Protobuf setup costs more than a warm, reused HTTP/1.1
+  connection doing one small `json.Decode`.
+- **Around N≈100 they cross over**, and gRPC stays modestly ahead for bigger lists,
+  because now the *payload* dominates and Protobuf packs the big list more efficiently
+  than JSON (which repeats field names for every recipient).
+- **The gap is never huge** — single-digit to low-double-digit percent. Nobody wins
+  by 2×.
+
+A useful way to see scaling — cost **per recipient** for gRPC: `85 µs` at N=1 →
+`~6 µs` at N=1000+. The N=1 number is almost all fixed per-call overhead; by N=1000
+that overhead is spread thin and you're paying the true marginal `~6 µs`/recipient.
+
+---
+
+## Part 4 — Results: THROUGHPUT (many requests at once)
+
+`make bench-parallel` — this is the "send a LOT of requests" test. Below, ns/op is
+converted to **requests/sec** (higher = better). Concurrency = how many requests are
+in flight simultaneously.
+
+### Tiny requests (`SendConfirmation`) — the clearest story
+
+| Concurrency | gRPC req/s | HTTP req/s | Notes |
+|---|---|---|---|
+| 1 | ~18,200 | **~21,800** | HTTP wins when serial (matches the latency result) |
+| 8 | ~41,200 | **~54,800** | both ~3× up; HTTP still ahead |
+| 64 | **~40,400** | ~26,400 | **HTTP collapses; gRPC holds steady** |
+
+**This is the headline.** Pile on concurrency and the transports *swap places*:
+
+- **gRPC stays flat (~40k req/s)** because it multiplexes all 64 concurrent requests
+  over **one HTTP/2 connection**. More load → no extra connections → no thrash.
+- **HTTP/1.1 degrades (54k → 26k req/s)** because it's one-request-per-connection. At
+  64-in-flight it churns its TCP connection pool — notice its `B/op` nearly **doubles**
+  (16.6 KB → 31.6 KB) from connection management overhead.
+
+So: **HTTP is faster when lightly loaded; gRPC is more stable under heavy concurrent
+load.** On a *real* network (not loopback) this gap widens further, since gRPC also
+avoids repeated connection setup.
+
+### Bigger requests — throughput becomes payload-bound
+
+Once each request carries a real payload, the bottleneck shifts from "managing
+connections" to "CPU composing + serializing the list," so the transport matters less:
+
+| N (recipients) | gRPC req/s @ conc 8 | HTTP req/s @ conc 8 | Verdict |
+|---|---|---|---|
+| 1 | ~46,800 | **~58,200** | HTTP ahead (tiny payload) |
+| 100 | ~3,940 | **~4,130** | basically tied |
+| 1000 | **~620** | ~490 | gRPC ~25% ahead |
+| 10000 | ~60 | ~62 | tied — limited by CPU, not transport |
+
+At N=10000, both do ~60 release-calls/sec — and each call emails 10,000 people, so
+that's **~600,000 recipients/sec** either way. Far beyond anything this app needs.
+
+---
+
+## Part 5 — Results: BYTES ON THE WIRE (the consistent gRPC win)
+
+Independent of speed, how big is each request on the wire? (`go test -run TestWireSize -v ./bench/...`)
+
+| Operation | N | Protobuf (B) | JSON (B) | JSON ÷ Proto |
 |---|---|---|---|---|
 | SendConfirmation | 1 | 93 | 149 | 1.60× |
 | SendReleaseNotifications | 1 | 135 | 209 | 1.55× |
@@ -80,60 +206,97 @@ and compare with `benchstat`.
 | SendReleaseNotifications | 1000 | 64,071 | 94,115 | 1.47× |
 | SendReleaseNotifications | 10000 | 640,071 | 940,115 | 1.47× |
 
-## Environment
+**Protobuf is ~1.5× smaller than JSON at every size**, because JSON repeats the field
+names (`"email":`, `"unsubscribe_token":`) and quotes for every recipient, while
+Protobuf uses tiny numeric tags. This is the one gRPC advantage that holds at *all*
+sizes and concurrency levels.
 
-- Machine / CPU: Apple M1 Pro
-- OS / arch (`goos`/`goarch`): darwin / arm64
-- Go version: go1.26.2
-- `-benchtime` / `-count`: defaults (1s, count=1), single run — treat ±10% as noise
+---
 
-## Conclusions
+## Part 6 — Pros & cons, side by side
 
-> Conclusions reflect the measured numbers above, not an assumed result.
+### gRPC (Protobuf / HTTP/2)
+**Pros**
+- ✅ ~1.5× smaller payloads on the wire — always.
+- ✅ Stable under high concurrency — one multiplexed connection, no pool thrash.
+- ✅ Modest latency edge for larger payloads (N ≥ ~100).
+- ✅ **Typed, generated contract** — the `.proto` is the single source of truth, so
+  client and server can't silently drift apart.
+- ✅ First-class deadlines, status codes, streaming, and reusable interceptors.
 
-**1. Per-call overhead (`SendConfirmation`, tiny payload): HTTP/JSON is actually
-faster here — not parity.** At a single tiny request, HTTP wins: **60.0 µs** vs
-gRPC's **88.3 µs** (gRPC ≈ 47% slower), with fewer allocations (191 vs 259). On
-loopback with no TLS, gRPC's per-call cost — HTTP/2 stream framing + the full
-server interceptor chain (recovery → correlation → metrics → auth) + Protobuf
-(un)marshalling — exceeds a pooled keep-alive HTTP/1.1 connection + `encoding/json`
-for a handful of fields. On the wire the request is tiny either way (93 B proto
-vs 149 B json), so size doesn't rescue gRPC at N=1.
+**Cons**
+- ❌ Slower for tiny, infrequent requests at low concurrency.
+- ❌ Slightly more allocations per call.
+- ❌ Binary format — can't just `curl` it or read it by eye (need `grpcurl`).
+- ❌ More setup: a `.proto` compiler and generated code in the build.
+- ❌ Not browser-native (needs grpc-web or a gateway).
 
-**2. Payload scaling (`SendReleaseNotifications`): gRPC overtakes around N≈100 and
-stays modestly ahead.**
-- **Latency crossover ≈ N=100.** At N=1 HTTP is faster (59.8 µs vs 86.7 µs); by
-  N=100 gRPC leads (735 µs vs 815 µs, ≈11% faster), N=1 000 ≈12% faster (6.01 ms
-  vs 6.84 ms), N=10 000 ≈3% faster (59.2 ms vs 61.0 ms). The edge is real but
-  modest, not order-of-magnitude.
-- **Allocations are ~comparable** — gRPC even allocates slightly *more* at small
-  N. So gRPC's win isn't an allocation story.
-- **Wire size is the consistent, size-independent gRPC win:** Protobuf is
-  **~1.47–1.60× smaller** than JSON at every N (JSON repeats field names + quoting
-  per recipient; Protobuf uses field tags + varints). That ratio holds from 93 B
-  up to 640 KB.
+### HTTP / JSON (HTTP/1.1)
+**Pros**
+- ✅ Faster for tiny requests at low concurrency.
+- ✅ Human-readable — trivial to debug with `curl` or a browser.
+- ✅ Universal — every language, tool, and proxy speaks it.
+- ✅ Minimal setup, no code generation.
 
-**3. At this app's real scale the throughput delta is small — so throughput is
-not the real decision driver.** The service polls a handful of repos every 5
-minutes and fans out to a repo's confirmed subscribers — realistically tens to a
-few hundred recipients, far below the N=10 000 stress point and nowhere near a hot
-loop. At that scale the measured gap is tens of µs to low single-digit ms per
-release — negligible against a 5-minute poll cadence, and for tiny confirmations
-HTTP is even marginally quicker.
+**Cons**
+- ❌ ~1.5× bigger payloads (repeats field names per item).
+- ❌ Throughput **degrades** under high concurrency (connection-pool thrash).
+- ❌ No enforced contract — request/response shapes are hand-maintained on both sides
+  and can drift out of sync.
+- ❌ More memory churn under concurrent load.
 
-The genuine reasons gRPC is the chosen runtime transport are therefore **not** raw
-throughput but:
-- **Typed, generated contract** — `proto/notifier.proto` is the single source of
-  truth; client/server stubs are generated, so the cross-process boundary can't
-  drift (no hand-maintained JSON DTOs on both sides).
-- **Tooling & debuggability** — first-class deadlines, status codes, and the
-  interceptor chain (auth/recovery/correlation/metrics) reused unchanged; streaming-ready.
-- **HW8 readiness** — the same contract becomes the async event the notifier
-  consumes once a broker lands.
+---
 
-**Honest bottom line:** at this app's scale we'd lose little throughput with HTTP
-— and for tiny requests HTTP is marginally *faster*. gRPC was chosen for the
-contract + tooling, not speed. Its measurable throughput wins are (a) ~1.5× smaller
-payloads at all sizes and (b) a modest latency edge that only appears above
-N≈100 — both of which would matter for a high-fan-out or high-RPS variant, but
-don't move the needle at this cadence.
+## Part 7 — So why does this app use gRPC?
+
+Honestly: **not for raw speed.** This service polls a few repos every 5 minutes and
+fans out to a repo's confirmed subscribers — realistically tens to a few hundred
+recipients, at low concurrency. In that regime the measured differences are tens of
+microseconds to a couple of milliseconds per release — invisible next to a 5-minute
+poll cycle, and HTTP is even marginally *faster* for the tiny confirmation emails.
+
+gRPC is the runtime transport because of the things that **don't** show up as a
+latency number:
+
+1. **Typed contract that can't drift.** `proto/notifier.proto` generates both the
+   client and server code, so the cross-service boundary stays in sync by construction
+   — no hand-written JSON structs maintained in two places.
+2. **Tooling & operability.** Built-in deadlines, status codes, and a reusable
+   interceptor chain (auth, correlation, metrics, recovery) — and it's streaming-ready.
+3. **Future-proofing for async.** The same contract becomes the event the notifier
+   consumes once a message broker is added.
+
+**The fair summary:** at this scale you'd lose almost nothing on speed with HTTP — and
+gain easy debuggability. gRPC wins on **contract safety, wire size, and stability under
+concurrency**, which is the right trade for *internal service-to-service* calls but not
+an obvious one for a public, browser-facing API.
+
+---
+
+## How this comparison is kept fair
+
+- **Same business logic, both transports.** Both servers wrap one `*notifier.Core`
+  over a no-op counting mailer — email sending is stubbed, so we measure transport +
+  (de)serialization, **not** SMTP.
+- **Provably identical behavior.** `TestTransportsEquivalent` asserts both transports
+  return the same result (`sent`/`failed`) for the same input at every N. So any
+  measured delta is transport-only.
+- **Warm, persistent connections on both sides** — one gRPC channel and one pooled
+  keep-alive HTTP client, each established once. Neither pays per-call connection setup.
+  HTTP compression is off so we compare raw JSON bytes.
+- **Auth on, symmetric.** The same bearer token is checked with a constant-time compare
+  on both sides — equal cost, no thumb on the scale.
+- **Plaintext, loopback (`127.0.0.1`), one machine, one tool** (`testing.B`) — no
+  cross-tool variance from `ghz`/`hey`/`k6`.
+- **Deterministic payloads**, warm-up before timing, `b.ResetTimer()` after setup,
+  `b.ReportAllocs()`.
+
+## Environment & caveats
+
+- Machine: Apple M1 Pro · darwin/arm64 · Go 1.26.
+- Numbers above are single `-count=1` runs on **loopback** — treat **±10% as noise**,
+  and the smallest-sample rows (N=10000, ~20 runs) as the least precise. The
+  HTTP-collapse-at-concurrency-64 effect is real and repeatable in direction, but the
+  exact magnitude wobbles run to run.
+- For anything you'd quote as fact, re-run with `-benchtime=2s -count=5` and compare
+  with `benchstat`.

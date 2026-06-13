@@ -25,10 +25,12 @@ func registerRoutes(router *gin.Engine, h *Handler, apiKey string) {
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	router.GET("/", subscribePage)
 
+	limiter := newIPRateLimiter(subscribeBurst).middleware()
+
 	apiGroup := router.Group("/api")
 	{
-		apiGroup.POST("/subscribe", h.Subscribe)
-		apiGroup.GET("/subscriptions", h.GetSubscriptions)
+		apiGroup.POST("/subscribe", limiter, h.Subscribe)
+		apiGroup.GET("/subscriptions", limiter, h.GetSubscriptions)
 		apiGroup.GET("/confirm/:token", h.ConfirmSubscription)
 		apiGroup.GET("/unsubscribe/:token", h.Unsubscribe)
 		apiGroup.POST("/unsubscribe/:token", h.Unsubscribe)

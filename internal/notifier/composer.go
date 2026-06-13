@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/templates"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier/templates"
 )
 
 // Zero-width space inserted after the URL scheme to prevent mail clients

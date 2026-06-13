@@ -27,7 +27,8 @@ func registerRoutes(router *gin.Engine, h *Handler, apiKey string) {
 
 	apiGroup := router.Group("/api")
 	{
-		// Token-in-URL routes: opened from mail clients, no API key.
+		apiGroup.POST("/subscribe", h.Subscribe)
+		apiGroup.GET("/subscriptions", h.GetSubscriptions)
 		apiGroup.GET("/confirm/:token", h.ConfirmSubscription)
 		apiGroup.GET("/unsubscribe/:token", h.Unsubscribe)
 		apiGroup.POST("/unsubscribe/:token", h.Unsubscribe)

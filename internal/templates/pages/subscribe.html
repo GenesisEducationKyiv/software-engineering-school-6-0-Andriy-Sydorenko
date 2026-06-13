@@ -35,9 +35,6 @@
     <input id="repo" name="repo" required autocomplete="off" placeholder="golang/go" pattern="[A-Za-z0-9._\-]+/[A-Za-z0-9._\-]+">
     <div class="hint">Format: <code>owner/repo</code> — e.g. <code>golang/go</code>.</div>
 
-    <label for="apikey">API key <span style="font-weight:400;color:#666">(optional — only if the server requires one)</span></label>
-    <input id="apikey" name="apikey" type="password" autocomplete="off">
-
     <button id="go" type="submit">Subscribe</button>
   </form>
 
@@ -58,8 +55,6 @@
     btn.disabled = true; show('Sending…', true);
 
     const headers = { 'Content-Type': 'application/json' };
-    const key = document.getElementById('apikey').value.trim();
-    if (key) headers['X-API-Key'] = key;
 
     const body = JSON.stringify({
       email: document.getElementById('email').value.trim(),

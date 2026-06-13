@@ -77,7 +77,7 @@ func run() error {
 
 	go scan.Run(ctx)
 
-	router := api.NewRouter(api.NewHandler(svc), cfg.APIKey)
+	router := api.NewRouter(api.NewHandler(svc))
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%s", cfg.Port),

@@ -87,23 +87,11 @@ failure surfaces.
   on a non-OK upstream response.
 - **`TestSubscribe_ServerError`** — same chain for 5xx.
 
-### `AuthSuite` (2 tests, separate harness with APIKey enforced)
-
-Lives in a different suite because it needs the API-key middleware
-**actually enforcing**, and toggling that mid-suite would break
-prior tests' baseURL contract.
-
-- **`TestSubscriptions_NoKey_401`** — middleware mount point is
-  right; a missing header gets a 401 specifically (not 403 or 200).
-- **`TestSubscriptions_WrongKey_403`** — the middleware distinguishes
-  "no key" from "wrong key", which matters for client retry logic.
-
 ## What's wired vs faked
 
 | Layer | Real | Fixture |
 |---|---|---|
 | Router (`gin`) | ✓ | |
-| Auth middleware (`X-API-Key`) | ✓ (opt-in via `Options.APIKey`) | |
 | Service + repository | ✓ | |
 | Postgres (testcontainers, migrated) | ✓ | |
 | Notifier + `SMTPMailer` (real SMTP send) | ✓ | |
@@ -134,7 +122,6 @@ public API:
 | `BrowserBaseURL` | Same app, addressable from inside the browser container (`http://host.testcontainers.internal:<port>`) |
 | `BrowserWSURL` | CDP websocket endpoint for `playwright.Chromium.ConnectOverCDP` |
 | `MailpitURL` | Mailpit HTTP API root |
-| `APIKey` | Mirrors `Options.APIKey` (empty = middleware bypass) |
 | `DB` | `*gorm.DB` for direct row inspection |
 | `GitHub` | `*GitHubFixture` — `SetBehavior(owner, b)`, `Reset()` |
 | `TruncateDB(t)` | Wipes `subscriptions` |
@@ -146,8 +133,6 @@ public API:
 - `GHValidator` — fully replace the GitHub fixture + real-client
   wiring (use only when a test needs a custom stub, not for
   per-behavior overrides).
-- `APIKey` — enable the API-key middleware. Default empty so
-  browser-form tests work without a header; `AuthSuite` opts in.
 
 ## Layout
 
@@ -156,7 +141,6 @@ tests/e2e/
   ui_test.go               SubscribeSuite + TestMain + shared helpers
   lifecycle_test.go        SubscribeSuite: TestLifecycle
   github_failures_test.go  SubscribeSuite: rate-limited, server-error
-  auth_test.go             AuthSuite (separate harness, APIKey enforced)
   harness/                 testcontainers + in-process app + fixtures
     harness.go             New(t, opts), shutdown, helpers
     browser.go             Chromium sidecar + CDP ws discovery
@@ -235,9 +219,6 @@ run stays container-free and browser-free.
 
 ## Conventions
 
-- **One suite per API-key mode.** Toggling the middleware mid-suite
-  would break the BaseURL contract for prior tests. `AuthSuite`
-  exists precisely for the protected paths.
 - **`SetBehavior` is per-test.** `BaseSuite.SetupTest` calls
   `GitHub.Reset()` so behavior overrides don't leak between tests.
 - **Tokens come from real mail.** Don't read them from the DB —
@@ -263,9 +244,8 @@ When reading an e2e-test change, the questions to ask:
    div has `display: none`" is testing browser defaults, not your
    app — a CSS tweak silently invalidates it.
 4. **Does the test need its own harness, or can it ride in
-   `SubscribeSuite`?** A new harness costs ~3s of container startup.
-   `AuthSuite` exists because middleware-toggling demanded it;
-   future suites should justify themselves.
+   `SubscribeSuite`?** A new harness costs ~3s of container startup;
+   a new suite should justify itself.
 5. **Are `route.Abort` / `SetBehavior` calls scoped to the test
    that needs them?** Leaking into other tests via shared state
    (the GH fixture map without `Reset`, a `page.Route` on a shared

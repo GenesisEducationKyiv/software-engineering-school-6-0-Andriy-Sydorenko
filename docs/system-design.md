@@ -258,10 +258,10 @@ Current shape is **one process, one scanner**. Each stage has a concrete trigger
 
 - **Tokens.** UUID v4, opaque (not signed). Separate confirm and unsubscribe tokens. Confirm tokens are one-shot and deleted on use. Unsubscribe tokens are long-lived (must survive in mail clients) and revoked when the subscription row is deleted. See ADR-005 for the full rationale, including future work (TTL/sweeper, constant-time compare, Referrer-Policy).
 - **Abuse / email-bombing - known gap.** `POST /api/subscribe` is the only unauthenticated write endpoint that triggers an outbound side effect (confirmation mail to a user-supplied address). It is **not currently rate-limited.** The confirm-token TTL bounds unconfirmed-row growth, but does not stop an attacker from flooding a victim's inbox. If this becomes a real problem, the standard mitigations are a per-IP token bucket on subscribe, a per-email cooldown (independent of IP, returning the same response shape whether the mail was sent or suppressed), and a CAPTCHA on the HTML form.
-- **Auth.** The public subscribe / confirm / unsubscribe endpoints are intentionally open. Optional `X-API-Key` (constant-time compared) gates admin/list endpoints.
+- **Auth.** The public HTTP endpoints (subscribe / confirm / unsubscribe / list) are open. The internal core↔notifier gRPC hop uses a shared bearer token (`INTERNAL_API_TOKEN`), constant-time compared.
 - **Inputs.** `repo` matched against `^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$` before any external call. Email validated by `net/mail`.
 - **SQL.** Parameterized through GORM; no string-concatenated queries.
-- **Secrets.** GitHub token, SMTP creds, API key via env / secret manager only. Never logged.
+- **Secrets.** GitHub token, SMTP creds, internal service token via env / secret manager only. Never logged.
 - **PII.** Only email is collected. Unsubscribe hard-deletes the row, so the email is physically removed - no tombstone retention to reconcile against erasure requests.
 - **Network.** No inbound webhook endpoint - outbound only - reduces attack surface vs. a push-based design (see ADR-002).
 
@@ -307,7 +307,6 @@ All configuration is via environment variables (12-factor). No config files.
 | `SCAN_INTERVAL` | `5m` | Lower bound `1m`; upper bound `1h`. |
 | `SCAN_CONCURRENCY` | `8` | Worker-pool size per tick (§5.1). |
 | `GITHUB_TIMEOUT` | `10s` | Per-call deadline for GitHub requests (§5.1). |
-| `API_KEY` | unset | When set, gates admin endpoints via `X-API-Key`. |
 
 **Proposed (referenced elsewhere in this doc, not yet wired):** `CONFIRM_TOKEN_TTL` (§11), `SUBSCRIBE_RATE_LIMIT` (§11).
 

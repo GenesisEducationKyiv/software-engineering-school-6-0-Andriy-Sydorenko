@@ -1,7 +1,11 @@
 # ADR-002: Release Detection Strategy and Scanner Concurrency
 
 ## Status
-Accepted
+Superseded by [ADR-012](012-modular-architecture-and-notifier-extraction.md) —
+release-detection state (`last_seen_tag`) moved from the subscription entity to
+a per-repo `watched_repo` table owned by the scanner module. The polling
+strategy itself (periodic pull, bounded worker pool, rate-limit handling)
+carries forward unchanged.
 
 ---
 

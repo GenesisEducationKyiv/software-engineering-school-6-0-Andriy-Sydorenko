@@ -18,9 +18,6 @@ func (s *SubscribeSuite) apiSubscribe(email, repo string) (int, string) {
 	body, _ := json.Marshal(map[string]string{"email": email, "repo": repo})
 	req, _ := http.NewRequest(http.MethodPost, s.H.BaseURL+"/api/subscribe", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	if s.H.APIKey != "" {
-		req.Header.Set("X-API-Key", s.H.APIKey)
-	}
 	resp, err := http.DefaultClient.Do(req)
 	s.Require().NoError(err)
 	defer resp.Body.Close()

@@ -69,10 +69,6 @@ contract in isolation.
   errors map to documented status codes; anything unmapped becomes a
   500 with a generic message (never leaks internal error text to the
   client).
-- **API-key middleware bypass when key is empty.** This is the
-  staging/dev pathway — accidentally enabling auth in dev would
-  block local testing.
-
 ### `internal/github`
 
 The HTTP client to api.github.com. Lots of branches on response

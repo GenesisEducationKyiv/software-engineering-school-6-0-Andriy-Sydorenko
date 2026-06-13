@@ -1,7 +1,9 @@
 # ADR-003: Service Decomposition
 
 ## Status
-Accepted
+Superseded by [ADR-012](012-modular-architecture-and-notifier-extraction.md) —
+the single-process modular monolith is replaced by a modular core
+(subscription + scanner) plus an extracted notifier microservice over gRPC.
 
 ---
 

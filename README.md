@@ -1,72 +1,110 @@
 # repo-release-notifier
 
-A small Go service that lets people subscribe (by email) to GitHub
-release notifications for a given repository. Users confirm via a
-link in the confirmation email; a background scanner polls GitHub
-and sends a notification whenever the latest tag for a repo changes.
+A small Go system that lets people subscribe (by email) to GitHub release
+notifications for a given repository. Users confirm via a link in the
+confirmation email; a background scanner polls GitHub and sends a notification
+whenever the latest tag for a repo changes.
 
-Single binary, PostgreSQL for storage, optional Redis for caching
-GitHub API responses, SMTP for email.
+**Two services** (HW7): a **core** (`cmd/server`) hosting the user-facing HTTP
+API + the subscription and scanner modules + the poll loop, and an extracted
+**notifier** microservice (`cmd/notifier`) that renders and sends email over a
+gRPC boundary. PostgreSQL for storage, optional Redis for caching GitHub
+responses, SMTP for email.
+
+See **[docs/architecture/microservices.md](docs/architecture/microservices.md)**
+for the module/service boundaries, public APIs, the boundary diagram, data
+ownership, and the HTTP-vs-gRPC benchmark — and
+**[ADR-012](docs/adr/012-modular-architecture-and-notifier-extraction.md)** for
+the decision record.
 
 ---
 
 ## Running
 
-Live deployment: <https://repo-release-notifier.vercel.app>
+The expected path is Docker Compose, which brings up Postgres, Redis, the core
+(`app`), and the internal notifier service together; migrations run on startup.
 
-The expected path is `docker compose up --build`. That brings up
-Postgres, Redis and the app together; migrations run on startup.
-
-Locally, once `.env` is populated (`cp .env.example .env` and fill
-in SMTP credentials at minimum):
-
+```bash
+cp .env.example .env        # fill in SMTP credentials at minimum
+docker compose up -d --build
+curl -fs localhost:8080/health
 ```
-go run ./cmd/server
-go test ./... -race
+
+- Core (user HTTP): <http://localhost:8080>
+- Notifier: **internal only** — gRPC `:50051` + admin HTTP `:8081` on the
+  compose network, **not** published to the host. The core dials it at
+  `notifier:50051` with the shared `INTERNAL_API_TOKEN`.
+
+Run both binaries locally without Docker (two terminals):
+```bash
+# terminal 1 — notifier (serves gRPC :50051 + admin :8081)
+INTERNAL_API_TOKEN=dev NOTIFIER_GRPC_ADDR=:50051 ADMIN_ADDR=:8081 \
+  BASE_URL=http://localhost:8080 SMTP_HOST=... SMTP_USERNAME=... SMTP_PASSWORD=... \
+  go run ./cmd/notifier
+
+# terminal 2 — core (dials the notifier on loopback)
+INTERNAL_API_TOKEN=dev NOTIFIER_ADDR=127.0.0.1:50051 \
+  go run ./cmd/server
+```
+
+Tests + lint:
+```bash
+make test-unit          # go test ./... -race
+make test-integration   # testcontainers Postgres
+make test-e2e           # testcontainers Postgres + Mailpit + Chromium; real gRPC hop
 golangci-lint run ./...
 ```
 
-Only `DATABASE_URL` (or the split `DB_*` vars) and the SMTP
-credentials are strictly required. `REDIS_URL`, `GITHUB_TOKEN` and
-`API_KEY` are optional but anything resembling production should
-set all three — see the notes below for why.
+Only the DB vars (`DATABASE_URL` or the split `DB_*`) and — on the **notifier** —
+the SMTP credentials are strictly required. `REDIS_URL` and `GITHUB_TOKEN` are
+optional; production should set both.
 
 ---
 
 ## Architecture
 
-One process, four concerns:
+Two binaries, three modules, one network boundary (core ↔ notifier).
 
-- **HTTP API** (Gin) — the four endpoints from the swagger spec
-  plus a `GET /` that serves an HTML subscription form and a
-  `GET /health` for liveness.
-- **Service layer** — all business logic; validates input, talks
-  to the repository, the GitHub client and the notifier. Depends
-  on interfaces, not concrete types.
-- **Scanner** — a ticker-driven goroutine that periodically
-  iterates every confirmed subscription, checks GitHub for a new
-  release tag, updates `last_seen_tag`, and hands off to the
-  notifier when a new tag appears.
-- **Notifier** — SMTP sender that renders HTML + plaintext email
-  bodies from embedded templates.
+- **core** (`cmd/server`, compose service `app`):
+  - **subscription module** — owns `subscriptions` + `confirmation_tokens`;
+    user-facing HTTP/JSON; public API `Subscribe/Confirm/Unsubscribe/
+    ListConfirmedRepos/ListConfirmedSubscribers`.
+  - **scanner module** — owns `watched_repo`; the poll loop + GitHub client;
+    public API `ValidateRepo`.
+  - The two modules call each other **only** through their Go-interface public
+    APIs (depguard-enforced) — never into each other's internals.
+- **notifier** (`cmd/notifier`, compose service `notifier`): stateless
+  render+send, reached over **gRPC** (`SendConfirmation`,
+  `SendReleaseNotifications`). SMTP lives here, not in the core.
 
-Packages follow the same shape:
+The core dials the notifier with a shared bearer token (`INTERNAL_API_TOKEN`,
+constant-time verified). A correlation ID propagates across the hop so a single
+request's logs join across both services. Full detail + diagram:
+[docs/architecture/microservices.md](docs/architecture/microservices.md).
+
+Package layout:
 
 ```
-cmd/server/main.go           composition root + graceful shutdown
+cmd/server/main.go           core composition root (subscription + scanner + dial notifier)
+cmd/notifier/main.go         notifier service composition root (gRPC + admin)
+
+proto/                       notifier.proto contract + generated stubs (notifierpb)
 
 internal/
-  domain/                    GORM models, DTOs, sentinel errors (no deps)
-  config/                    env loader
+  domain/                    GORM models, DTOs, sentinel errors (leaf, no deps)
+  config/                    core env loader
   db/                        Postgres connection, migrations
-  api/                       HTTP handlers, middleware, router, pages
-  service/                   business logic, domain error mapping
-  repository/                GORM queries
+  api/                       core HTTP handlers, middleware, router, pages
+  subscription/              subscription module — service + public API + repository
+  scanner/                   scanner module — poll loop + ValidateRepo + watched_repo
+  notifier/                  notifier service-core (Core), gRPC server, SMTP, email templates
+  notifierclient/            core-side gRPC client adapter (the modules' notifier port)
+  platform/                  shared gRPC bootstrap, interceptors, admin server, env helpers
+  observability/             correlation ID, context-aware slog, HTTP + gRPC metrics
   github/                    GitHub client + optional Redis-cached wrapper
-  notifier/                  SMTP + template rendering
-  scanner/                   background release checker
   cache/                     thin Redis wrapper
-  templates/                 embedded HTML (emails + pages)
+  templates/                 embedded HTML (public pages)
+bench/                       HTTP-vs-gRPC benchmark (star task)
 ```
 
 The layering is strict:
@@ -80,8 +118,8 @@ Handler  →  Service  →  Repository  →  DB
 Handlers parse HTTP and map domain errors to status codes; they
 never touch GORM or know anything about SMTP. The service never
 returns HTTP responses or takes a `gin.Context`. Interfaces are
-declared at the consumer — `service.SubscriptionRepository`,
-`scanner.Repository`, `service.ConfirmationSender` and friends are
+declared at the consumer — `subscription.SubscriptionRepository`,
+`scanner.WatchedRepoStore`, `subscription.ConfirmationSender` and friends are
 defined where they're used, and the implementing packages satisfy
 them structurally. No DI framework.
 
@@ -202,9 +240,7 @@ changes; the dependency is genuinely optional.
 
 `GET /` serves a minimal form from `internal/templates/pages/subscribe.html`
 (embedded via `//go:embed`). It `fetch`es `POST /api/subscribe`
-with a JSON body and shows inline success / error messages. If
-the deployment has an API key configured, there's an optional
-password field on the form for it.
+with a JSON body and shows inline success / error messages.
 
 All HTML the service ever emits — emails and public pages — lives
 under `internal/templates/` and goes through `RenderEmail` or
@@ -236,40 +272,52 @@ with three things worth mentioning:
 
 ---
 
-## API key authentication
+## HTTP API vs gRPC benchmark (star task)
 
-`POST /api/subscribe` and `GET /api/subscriptions` sit behind an
-`X-API-Key` header check when `API_KEY` is set. Confirm and
-unsubscribe stay open because they're opened from mail clients,
-which can't attach request headers — the token in the URL is the
-capability for those routes (UUID v4, 122 bits of entropy).
+The core↔notifier boundary runs on **gRPC** in production. To satisfy the star
+task — "implement the inter-service hop over both HTTP API and gRPC and compare"
+— `bench/` stands up, in-process over loopback, a real gRPC server and a real
+idiomatic HTTP/JSON server, **both wrapping the same notifier core**, and
+measures both on the same workloads:
 
-When `API_KEY` is unset, the middleware no-ops. That's convenient
-for local development; production deployments must set the env var.
+- `SendReleaseNotifications` at N = 1 / 100 / 1 000 / 10 000 recipients
+  (payload/serialization scaling).
+- `SendConfirmation` (per-call overhead).
+
+Run it:
+
+```bash
+make bench   # go test -bench=. -benchmem -run='^$' ./bench/...
+```
+
+Result (measured): the comparison is two-sided — for tiny payloads HTTP/JSON is
+marginally *faster* on loopback, gRPC overtakes around N≈100 and leads modestly
+on larger batches, and Protobuf is consistently ~1.5× smaller on the wire. At
+this app's scale the delta is small, so the real reasons we run gRPC are typed
+contracts + tooling + HW8-readiness, not raw throughput. **Full numbers +
+methodology: [`bench/README.md`](bench/README.md).**
 
 ---
 
-## REST vs gRPC
+## Environment variables
 
-The task lists gRPC as a bonus. I skipped it on purpose.
+`.env.example` is the source of truth; copy it to `.env`. Vars are owned by the
+service that reads them.
 
-The two services we talk to are GitHub (REST + GraphQL only — no
-gRPC endpoint to consume) and SMTP (obviously not gRPC). The two
-services that talk to us are browsers and email clients. Browsers
-can't speak gRPC natively — they need gRPC-Web and a proxy in
-front. Email clients open HTTP links, period. There is no
-internal service mesh here, no streaming, no bidirectional flow,
-no sub-millisecond latency target.
-
-Adding gRPC would mean duplicating every handler against a
-protobuf service, running codegen, and then still needing the
-REST surface anyway because the web page and the email links
-can't go away. That's pure surface area for zero consumer
-benefit, so the endpoints stay REST-only.
-
-If this project ever grew a second Go service that wanted to
-subscribe/unsubscribe users programmatically in bulk, gRPC would
-start making sense. It doesn't today.
+| Variable | Service | Default | Purpose |
+|---|---|---|---|
+| `DATABASE_URL` / `DB_*` | core | split `DB_*` | Postgres connection (URL wins if set) |
+| `REDIS_URL` | core | empty (disabled) | cache GitHub responses 10m |
+| `PORT` | core | `8080` | user-facing HTTP port |
+| `GITHUB_TOKEN` | core | empty | lifts GitHub rate limit (60→5000 req/hr) |
+| `SCAN_INTERVAL` | core | `5m` | poll cadence |
+| `NOTIFIER_ADDR` | core | `notifier:50051` | gRPC dial target for the notifier |
+| `INTERNAL_API_TOKEN` | **both** | `dev-internal-token` | shared bearer secret on the gRPC hop (must match) |
+| `NOTIFIER_GRPC_ADDR` | notifier | `:50051` | gRPC listen addr (internal only) |
+| `ADMIN_ADDR` | notifier | `:8081` | admin HTTP (`/health` + `/metrics`) |
+| `BASE_URL` | notifier | `http://localhost:8080` | base for email links |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | notifier | — | email transport (required on the notifier) |
+| `LOG_LEVEL` / `LOG_FORMAT` | both | `info` / `text` | logging |
 
 ---
 
@@ -335,7 +383,7 @@ Three tiers, gated by Go build tags and orchestrated via the
     assertion via `httptest`; positive/negative caching with
     rate-limit responses never cached.
   - `api` — each endpoint end-to-end via `httptest` with a mocked
-    service; API-key enabled / disabled / missing / wrong.
+    service (handlers, routing, domain-error → status mapping).
   - `domain` — DTO shape matches the swagger keys exactly, so
     `UnsubscribeToken` can't accidentally leak.
 - **Integration** (`make test-integration`, build tag

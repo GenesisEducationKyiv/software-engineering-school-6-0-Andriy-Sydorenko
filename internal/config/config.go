@@ -28,7 +28,6 @@ type Config struct {
 	Log     logging.Config
 
 	Port          string
-	APIKey        string
 	NotifierAddr  string
 	InternalToken string
 }
@@ -67,7 +66,6 @@ func LoadConfig() (*Config, error) {
 			Format: logging.Format(strings.ToLower(platform.GetOrDefault("LOG_FORMAT", "text"))),
 		},
 		Port:          platform.GetOrDefault("PORT", "8080"),
-		APIKey:        os.Getenv("API_KEY"),
 		NotifierAddr:  platform.GetOrDefault("NOTIFIER_ADDR", "notifier:50051"),
 		InternalToken: os.Getenv("INTERNAL_API_TOKEN"),
 	}

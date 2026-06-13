@@ -150,7 +150,6 @@ func (s *SubscribeSuite) TestRendersForm() {
 	})).ToBeVisible())
 	s.Require().NoError(expect.Locator(emailField(p)).ToBeVisible())
 	s.Require().NoError(expect.Locator(repoField(p)).ToBeVisible())
-	s.Require().NoError(expect.Locator(p.GetByLabel(regexp.MustCompile(`(?i)api key`))).ToBeVisible())
 	s.Require().NoError(expect.Locator(submitBtn(p)).ToBeEnabled())
 }
 

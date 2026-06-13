@@ -2,7 +2,16 @@ global:
   scrape_interval: 15s
 
 scrape_configs:
-  - job_name: app
+  - job_name: core
     metrics_path: /metrics
     static_configs:
       - targets: ["app:8080"]
+        labels:
+          service: core
+
+  - job_name: notifier
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["notifier:8081"]
+        labels:
+          service: notifier

@@ -31,7 +31,6 @@ import (
 )
 
 const (
-	DefaultAPIKey        = "test-key"
 	harnessInternalToken = "harness-internal-token"
 	pgImage              = "postgres:16-alpine"
 	mailpitImage         = "axllent/mailpit:v1.20"
@@ -43,7 +42,6 @@ type Harness struct {
 	BrowserBaseURL string
 	BrowserWSURL   string
 	MailpitURL     string
-	APIKey         string
 	DB             *gorm.DB
 	GitHub         *GitHubFixture
 
@@ -57,7 +55,6 @@ type Harness struct {
 
 type Options struct {
 	GHValidator subscription.RepoValidator
-	APIKey      string
 }
 
 // New boots Postgres + Mailpit containers and a fresh in-process app,
@@ -126,7 +123,7 @@ func New(t *testing.T, opts ...Options) *Harness {
 	notifierClient := notifierclient.NewAdapter(pb.NewNotifierServiceClient(notifierConn))
 
 	svc := subscription.New(repo, gh, notifierClient, subscription.RandomToken)
-	router := api.NewRouter(api.NewHandler(svc), o.APIKey)
+	router := api.NewRouter(api.NewHandler(svc))
 
 	srv := &http.Server{
 		Handler:           router,
@@ -146,7 +143,6 @@ func New(t *testing.T, opts ...Options) *Harness {
 		BrowserBaseURL: browserBaseURL,
 		BrowserWSURL:   wsURL,
 		MailpitURL:     mailpitURL,
-		APIKey:         o.APIKey,
 		DB:             db,
 		GitHub:         ghFix,
 		pgC:            pgC,

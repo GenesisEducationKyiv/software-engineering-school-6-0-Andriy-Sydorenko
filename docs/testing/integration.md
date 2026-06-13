@@ -37,7 +37,6 @@ end-to-end in the e2e suite via real `github.Client` against an
 | Layer | Real | Stubbed |
 |---|---|---|
 | Router (`gin`) | ✓ | |
-| Auth middleware (`X-API-Key`) | ✓ | |
 | Service + repository | ✓ | |
 | Postgres (testcontainers, migrated) | ✓ | |
 | GitHub validator | | `stubGitHub` — `wantErr` per test |

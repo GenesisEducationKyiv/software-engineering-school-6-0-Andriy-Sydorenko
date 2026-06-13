@@ -22,8 +22,6 @@ import (
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
 )
 
-const testAPIKey = "test-api-key"
-
 var (
 	sharedDB     *gorm.DB
 	sharedDBOnce sync.Once
@@ -108,7 +106,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	mailer := &stubMailer{}
 	repo := subscription.NewRepository(db)
 	svc := subscription.New(repo, gh, mailer, subscription.RandomToken)
-	router := api.NewRouter(api.NewHandler(svc), testAPIKey)
+	router := api.NewRouter(api.NewHandler(svc))
 
 	return &testEnv{
 		router: router,

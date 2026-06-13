@@ -40,7 +40,6 @@ func (s *SmokeSuite) TestSubscribeRoundTripsMailThroughMailpit() {
 	})
 	req, _ := http.NewRequest(http.MethodPost, s.H.BaseURL+"/api/subscribe", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", s.H.APIKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	s.Require().NoError(err)

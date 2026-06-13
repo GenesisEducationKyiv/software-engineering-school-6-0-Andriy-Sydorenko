@@ -6,12 +6,15 @@ filebeat.inputs:
 processors:
   - add_docker_metadata:
       host: "unix:///var/run/docker.sock"
-  # Keep only the app container; the Compose service label survives rebuilds.
+  # Keep only our app containers; the Compose service label survives rebuilds.
   - drop_event:
       when:
         not:
-          equals:
-            container.labels.com_docker_compose_service: "app"
+          or:
+            - equals:
+                container.labels.com_docker_compose_service: "app"
+            - equals:
+                container.labels.com_docker_compose_service: "notifier"
   - decode_json_fields:
       fields: ["message"]
       target: ""

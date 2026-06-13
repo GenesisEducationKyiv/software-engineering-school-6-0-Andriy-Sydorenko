@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-integration test-e2e build-check generate-mocks verify-mocks install-hooks proto
+.PHONY: test test-unit test-integration test-e2e build-check generate-mocks verify-mocks install-hooks proto bench
 
 # Compile every main package without producing artifact files.
 # Vets default + integration + e2e tagged code.
@@ -59,3 +59,10 @@ proto:
 	  --go_out=. --go_opt=module=github.com/Andriy-Sydorenko/repo-release-notifier \
 	  --go-grpc_out=. --go-grpc_opt=module=github.com/Andriy-Sydorenko/repo-release-notifier \
 	  proto/notifier.proto
+
+# HTTP-API-vs-gRPC benchmark (star task). Runs every Benchmark* in bench/ with
+# allocation accounting; -run='^$$' skips the package's correctness Tests so only
+# benchmarks run. See bench/README.md for results + conclusions. For the
+# equivalence proof + wire-size table: go test -v ./bench/...
+bench:
+	go test -bench=. -benchmem -run='^$$' ./bench/...

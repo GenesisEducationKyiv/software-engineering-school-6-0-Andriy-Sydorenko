@@ -32,11 +32,17 @@ func mailpitContainer(t *testing.T) (smtpHost, smtpPort, httpURL string) {
 	req := testcontainers.ContainerRequest{
 		Image:        "axllent/mailpit:latest",
 		ExposedPorts: []string{"1025/tcp", "8025/tcp"},
-		WaitingFor:   wait.ForListeningPort("8025/tcp").WithStartupTimeout(60 * time.Second),
+		Env: map[string]string{
+			"MP_SMTP_AUTH_ACCEPT_ANY":     "true",
+			"MP_SMTP_AUTH_ALLOW_INSECURE": "true",
+		},
+		WaitingFor: wait.ForListeningPort("8025/tcp").WithStartupTimeout(60 * time.Second),
 	}
-	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req, Started: true,
-	})
+	c, err := testcontainers.GenericContainer(
+		ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: req, Started: true,
+		},
+	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Terminate(ctx) })
 
@@ -64,13 +70,15 @@ func startNotifier(t *testing.T, core *notifier.Core) string {
 func TestNotifierGRPC_SendConfirmation_deliversToMailpit(t *testing.T) {
 	smtpHost, smtpPort, httpURL := mailpitContainer(t)
 
-	core := notifier.NewCore(&notifier.Config{
-		Host:     smtpHost,
-		Port:     smtpPort,
-		Username: "notify@example.com", // Mailpit accepts any creds
-		Password: "x",
-		BaseURL:  "https://notify.example.com",
-	})
+	core := notifier.NewCore(
+		&notifier.Config{
+			Host:     smtpHost,
+			Port:     smtpPort,
+			Username: "notify@example.com", // Mailpit accepts any creds
+			Password: "x",
+			BaseURL:  "https://notify.example.com",
+		},
+	)
 	addr := startNotifier(t, core)
 
 	conn, err := platform.Dial(addr, internalToken)
@@ -79,7 +87,10 @@ func TestNotifierGRPC_SendConfirmation_deliversToMailpit(t *testing.T) {
 	client := notifierclient.NewAdapter(pb.NewNotifierServiceClient(conn))
 
 	to := "subscriber@example.com"
-	require.NoError(t, client.SendConfirmation(context.Background(), to, "golang/go", "ctok", "utok"))
+	require.NoError(
+		t,
+		client.SendConfirmation(context.Background(), to, "golang/go", "ctok", "utok"),
+	)
 
 	body := waitForMailpit(t, httpURL, to, 10*time.Second)
 	assert.Contains(t, body, "/api/confirm/ctok")
@@ -96,11 +107,13 @@ func TestNotifierGRPC_SendReleaseNotifications_batchCountsRoundTrip(t *testing.T
 	t.Cleanup(func() { _ = conn.Close() })
 	client := notifierclient.NewAdapter(pb.NewNotifierServiceClient(conn))
 
-	err = client.SendReleaseNotifications(context.Background(), "golang/go", "v1.24.0", "https://n",
+	err = client.SendReleaseNotifications(
+		context.Background(), "golang/go", "v1.24.0", "https://n",
 		[]notifierclient.Recipient{
 			{Email: "a@x.com", UnsubscribeToken: "u1"},
 			{Email: "b@x.com", UnsubscribeToken: "u2"},
-		})
+		},
+	)
 	require.NoError(t, err)
 }
 

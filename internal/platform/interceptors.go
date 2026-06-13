@@ -27,9 +27,10 @@ func AuthServerInterceptor(token string) grpc.UnaryServerInterceptor {
 		_ *grpc.UnaryServerInfo, handler grpc.UnaryHandler,
 	) (any, error) {
 		got := []byte(bearerFromContext(ctx))
-		// ConstantTimeCompare also returns 0 on length mismatch, so a missing or
-		// short token is rejected without leaking timing.
-		if subtle.ConstantTimeCompare(got, want) != 1 {
+		// ConstantTimeCompare returns 0 on length mismatch (rejecting a missing or
+		// short token without leaking timing) but 1 for empty==empty — guard an
+		// empty configured token so an unset secret can never accept.
+		if len(want) == 0 || subtle.ConstantTimeCompare(got, want) != 1 {
 			return nil, status.Error(codes.Unauthenticated, "invalid or missing token")
 		}
 		return handler(ctx, req)

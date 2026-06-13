@@ -2,6 +2,10 @@ package notifier
 
 import (
 	"context"
+	"log/slog"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pb "github.com/Andriy-Sydorenko/repo-release-notifier/proto/gen/notifierpb"
 )
@@ -10,7 +14,7 @@ import (
 // satisfies it; tests substitute a fake. Defined here (consumer side) so the
 // server depends on a narrow interface, not the concrete *Core.
 type sender interface {
-	SendConfirmation(ctx context.Context, email, repo, confirmToken, unsubscribeToken string) (sent, failed uint32, err error)
+	SendConfirmation(ctx context.Context, email, repo, confirmURL, unsubscribeURL string) (sent, failed uint32, err error)
 	SendReleaseNotifications(ctx context.Context, repo, tag, notesURL string, recipients []Recipient) (sent, failed uint32, err error)
 }
 
@@ -30,10 +34,11 @@ func (s *GRPCServer) SendConfirmation(
 	ctx context.Context, req *pb.SendConfirmationRequest,
 ) (*pb.SendAck, error) {
 	sent, failed, err := s.core.SendConfirmation(
-		ctx, req.GetEmail(), req.GetRepo(), req.GetConfirmToken(), req.GetUnsubscribeToken(),
+		ctx, req.GetEmail(), req.GetRepo(), req.GetConfirmUrl(), req.GetUnsubscribeUrl(),
 	)
 	if err != nil {
-		return nil, err
+		slog.ErrorContext(ctx, "notifier: send confirmation failed", "repo", req.GetRepo(), "err", err)
+		return nil, status.Error(codes.Internal, "send confirmation failed")
 	}
 	return &pb.SendAck{Sent: sent, Failed: failed}, nil
 }
@@ -44,15 +49,17 @@ func (s *GRPCServer) SendReleaseNotifications(
 	recipients := make([]Recipient, 0, len(req.GetRecipients()))
 	for _, r := range req.GetRecipients() {
 		recipients = append(recipients, Recipient{
-			Email:            r.GetEmail(),
-			UnsubscribeToken: r.GetUnsubscribeToken(),
+			Email:          r.GetEmail(),
+			UnsubscribeURL: r.GetUnsubscribeUrl(),
 		})
 	}
 	sent, failed, err := s.core.SendReleaseNotifications(
 		ctx, req.GetRepo(), req.GetTag(), req.GetNotesUrl(), recipients,
 	)
 	if err != nil {
-		return nil, err
+		slog.ErrorContext(ctx, "notifier: send release notifications failed",
+			"repo", req.GetRepo(), "tag", req.GetTag(), "err", err)
+		return nil, status.Error(codes.Internal, "send release notifications failed")
 	}
 	return &pb.SendAck{Sent: sent, Failed: failed}, nil
 }

@@ -83,7 +83,7 @@ func (h *harness) Close() {
 func (h *harness) grpcConfirmation(ctx context.Context) (sent, failed uint32, err error) {
 	email, repo, ct, ut := confirmationFields()
 	ack, err := h.grpc.SendConfirmation(ctx, &pb.SendConfirmationRequest{
-		Email: email, Repo: repo, ConfirmToken: ct, UnsubscribeToken: ut,
+		Email: email, Repo: repo, ConfirmUrl: ct, UnsubscribeUrl: ut,
 	})
 	if err != nil {
 		return 0, 0, err
@@ -104,7 +104,7 @@ func (h *harness) grpcRelease(ctx context.Context, recipients []notifier.Recipie
 	repo, tag, notesURL := releaseFields()
 	pbr := make([]*pb.Recipient, len(recipients))
 	for i, r := range recipients {
-		pbr[i] = &pb.Recipient{Email: r.Email, UnsubscribeToken: r.UnsubscribeToken}
+		pbr[i] = &pb.Recipient{Email: r.Email, UnsubscribeUrl: r.UnsubscribeURL}
 	}
 	ack, err := h.grpc.SendReleaseNotifications(ctx, &pb.SendReleaseNotificationsRequest{
 		Repo: repo, Tag: tag, NotesUrl: notesURL, Recipients: pbr,

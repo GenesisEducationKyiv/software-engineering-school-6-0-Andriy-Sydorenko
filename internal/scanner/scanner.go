@@ -116,6 +116,14 @@ func (s *Scanner) ValidateRepo(ctx context.Context, owner, repo string) (bool, e
 }
 
 func (s *Scanner) Run(ctx context.Context) {
+	// subs is injected post-construction via SetSubscribers to break the
+	// subscription↔scanner cycle. Guard the wiring invariant loudly rather than
+	// nil-deref deep inside runOnce if that call is ever dropped or reordered.
+	if s.subs == nil {
+		slog.ErrorContext(ctx, "scanner: subscriber lister not configured (SetSubscribers not called); scanner disabled")
+		return
+	}
+
 	slog.InfoContext(
 		ctx, "scanner started",
 		"interval", s.cfg.Interval,
@@ -238,7 +246,10 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 	}
 
 	// Persist before notifying: a failed upsert would re-fire next scan, so gate
-	// the whole fan-out on it.
+	// the whole fan-out on it. The baseline advances even when subs is empty (the
+	// last subscriber unsubscribed between ListConfirmedRepos and here): anyone
+	// confirming after this point subscribed post-release and, exactly like a
+	// first sighting (§9), must not be notified about a tag that predates them.
 	if err := s.store.UpsertLastSeenTag(ctx, repo, tag); err != nil {
 		return err
 	}

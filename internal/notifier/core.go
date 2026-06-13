@@ -8,22 +8,22 @@ import (
 // Recipient is one release-notification target. Transport-agnostic — the
 // grpcserver maps notifierpb.Recipient to this; the core never sees proto.
 type Recipient struct {
-	Email            string
-	UnsubscribeToken string
+	Email          string
+	UnsubscribeURL string
 }
 
 // Core is the notifier service-core: render (composer) + send (mailer), with no
-// transport types in its signatures. The gRPC server (production) and the
-// benchmark HTTP handler both wrap this same Core.
+// transport types in its signatures.
 type Core struct {
 	composer *Composer
 	mailer   Mailer
 }
 
-// NewCore builds a Core from SMTP config. baseURL drives the email links.
+// NewCore builds a Core from SMTP config. Email links arrive pre-rendered from
+// the core, so the notifier needs no BASE_URL of its own.
 func NewCore(cfg *Config) *Core {
 	return &Core{
-		composer: NewComposer(cfg.BaseURL),
+		composer: NewComposer(),
 		mailer:   NewSMTPMailer(cfg),
 	}
 }
@@ -31,8 +31,8 @@ func NewCore(cfg *Config) *Core {
 // NewCoreWithMailer builds a Core with an explicit Mailer. Used where the mailer
 // must be substituted (benchmarks, integration tests that assert transport
 // without hitting SMTP).
-func NewCoreWithMailer(baseURL string, mailer Mailer) *Core {
-	return &Core{composer: NewComposer(baseURL), mailer: mailer}
+func NewCoreWithMailer(mailer Mailer) *Core {
+	return &Core{composer: NewComposer(), mailer: mailer}
 }
 
 // SendConfirmation renders + sends one confirmation email. A render failure is
@@ -41,9 +41,9 @@ func NewCoreWithMailer(baseURL string, mailer Mailer) *Core {
 // contract is (sent, failed, err).
 func (c *Core) SendConfirmation(
 	ctx context.Context,
-	email, repo, confirmToken, unsubscribeToken string,
+	email, repo, confirmURL, unsubscribeURL string,
 ) (sent, failed uint32, err error) {
-	msg, err := c.composer.Confirmation(email, repo, confirmToken, unsubscribeToken)
+	msg, err := c.composer.Confirmation(email, repo, confirmURL, unsubscribeURL)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -65,14 +65,32 @@ func (c *Core) SendReleaseNotifications(
 	recipients []Recipient,
 ) (sent, failed uint32, err error) {
 	for _, r := range recipients {
-		msg, composeErr := c.composer.Release(r.Email, repo, tag, r.UnsubscribeToken)
+		msg, composeErr := c.composer.Release(r.Email, repo, tag, r.UnsubscribeURL)
 		if composeErr != nil {
-			slog.ErrorContext(ctx, "notifier: release compose failed", "repo", repo, "tag", tag, "err", composeErr)
+			slog.ErrorContext(
+				ctx,
+				"notifier: release compose failed",
+				"repo",
+				repo,
+				"tag",
+				tag,
+				"err",
+				composeErr,
+			)
 			failed++
 			continue
 		}
 		if sendErr := c.mailer.Send(ctx, msg); sendErr != nil {
-			slog.ErrorContext(ctx, "notifier: release send failed", "repo", repo, "tag", tag, "err", sendErr)
+			slog.ErrorContext(
+				ctx,
+				"notifier: release send failed",
+				"repo",
+				repo,
+				"tag",
+				tag,
+				"err",
+				sendErr,
+			)
 			failed++
 			continue
 		}

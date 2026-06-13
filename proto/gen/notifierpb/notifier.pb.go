@@ -22,14 +22,16 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// The core renders all app-relative links and passes ready URLs; the notifier
+// neither knows the core's BASE_URL nor its route scheme.
 type SendConfirmationRequest struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Email            string                 `protobuf:"bytes,1,opt,name=email,proto3" json:"email,omitempty"`
-	Repo             string                 `protobuf:"bytes,2,opt,name=repo,proto3" json:"repo,omitempty"`
-	ConfirmToken     string                 `protobuf:"bytes,3,opt,name=confirm_token,json=confirmToken,proto3" json:"confirm_token,omitempty"`
-	UnsubscribeToken string                 `protobuf:"bytes,4,opt,name=unsubscribe_token,json=unsubscribeToken,proto3" json:"unsubscribe_token,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Email          string                 `protobuf:"bytes,1,opt,name=email,proto3" json:"email,omitempty"`
+	Repo           string                 `protobuf:"bytes,2,opt,name=repo,proto3" json:"repo,omitempty"`
+	ConfirmUrl     string                 `protobuf:"bytes,3,opt,name=confirm_url,json=confirmUrl,proto3" json:"confirm_url,omitempty"`
+	UnsubscribeUrl string                 `protobuf:"bytes,4,opt,name=unsubscribe_url,json=unsubscribeUrl,proto3" json:"unsubscribe_url,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SendConfirmationRequest) Reset() {
@@ -76,16 +78,16 @@ func (x *SendConfirmationRequest) GetRepo() string {
 	return ""
 }
 
-func (x *SendConfirmationRequest) GetConfirmToken() string {
+func (x *SendConfirmationRequest) GetConfirmUrl() string {
 	if x != nil {
-		return x.ConfirmToken
+		return x.ConfirmUrl
 	}
 	return ""
 }
 
-func (x *SendConfirmationRequest) GetUnsubscribeToken() string {
+func (x *SendConfirmationRequest) GetUnsubscribeUrl() string {
 	if x != nil {
-		return x.UnsubscribeToken
+		return x.UnsubscribeUrl
 	}
 	return ""
 }
@@ -160,11 +162,11 @@ func (x *SendReleaseNotificationsRequest) GetRecipients() []*Recipient {
 }
 
 type Recipient struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Email            string                 `protobuf:"bytes,1,opt,name=email,proto3" json:"email,omitempty"`
-	UnsubscribeToken string                 `protobuf:"bytes,2,opt,name=unsubscribe_token,json=unsubscribeToken,proto3" json:"unsubscribe_token,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Email          string                 `protobuf:"bytes,1,opt,name=email,proto3" json:"email,omitempty"`
+	UnsubscribeUrl string                 `protobuf:"bytes,2,opt,name=unsubscribe_url,json=unsubscribeUrl,proto3" json:"unsubscribe_url,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Recipient) Reset() {
@@ -204,9 +206,9 @@ func (x *Recipient) GetEmail() string {
 	return ""
 }
 
-func (x *Recipient) GetUnsubscribeToken() string {
+func (x *Recipient) GetUnsubscribeUrl() string {
 	if x != nil {
-		return x.UnsubscribeToken
+		return x.UnsubscribeUrl
 	}
 	return ""
 }
@@ -267,22 +269,23 @@ var File_proto_notifier_proto protoreflect.FileDescriptor
 
 const file_proto_notifier_proto_rawDesc = "" +
 	"\n" +
-	"\x14proto/notifier.proto\x12\vnotifier.v1\"\x95\x01\n" +
+	"\x14proto/notifier.proto\x12\vnotifier.v1\"\x8d\x01\n" +
 	"\x17SendConfirmationRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x12\x12\n" +
-	"\x04repo\x18\x02 \x01(\tR\x04repo\x12#\n" +
-	"\rconfirm_token\x18\x03 \x01(\tR\fconfirmToken\x12+\n" +
-	"\x11unsubscribe_token\x18\x04 \x01(\tR\x10unsubscribeToken\"\x9c\x01\n" +
+	"\x04repo\x18\x02 \x01(\tR\x04repo\x12\x1f\n" +
+	"\vconfirm_url\x18\x03 \x01(\tR\n" +
+	"confirmUrl\x12'\n" +
+	"\x0funsubscribe_url\x18\x04 \x01(\tR\x0eunsubscribeUrl\"\x9c\x01\n" +
 	"\x1fSendReleaseNotificationsRequest\x12\x12\n" +
 	"\x04repo\x18\x01 \x01(\tR\x04repo\x12\x10\n" +
 	"\x03tag\x18\x02 \x01(\tR\x03tag\x12\x1b\n" +
 	"\tnotes_url\x18\x03 \x01(\tR\bnotesUrl\x126\n" +
 	"\n" +
 	"recipients\x18\x04 \x03(\v2\x16.notifier.v1.RecipientR\n" +
-	"recipients\"N\n" +
+	"recipients\"J\n" +
 	"\tRecipient\x12\x14\n" +
-	"\x05email\x18\x01 \x01(\tR\x05email\x12+\n" +
-	"\x11unsubscribe_token\x18\x02 \x01(\tR\x10unsubscribeToken\"5\n" +
+	"\x05email\x18\x01 \x01(\tR\x05email\x12'\n" +
+	"\x0funsubscribe_url\x18\x02 \x01(\tR\x0eunsubscribeUrl\"5\n" +
 	"\aSendAck\x12\x12\n" +
 	"\x04sent\x18\x01 \x01(\rR\x04sent\x12\x16\n" +
 	"\x06failed\x18\x02 \x01(\rR\x06failed2\xc1\x01\n" +

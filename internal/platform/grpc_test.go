@@ -67,6 +67,19 @@ func TestServerClient_authRejectsWrongToken(t *testing.T) {
 	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 }
 
+func TestServerClient_authRejectsEmptyToken(t *testing.T) {
+	// An empty configured token must never accept, even from an empty client token:
+	// subtle.ConstantTimeCompare returns 1 for empty==empty.
+	addr := startServer(t, "", &fakeNotifier{})
+	conn, err := platform.Dial(addr, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	client := pb.NewNotifierServiceClient(conn)
+
+	_, err = client.SendConfirmation(context.Background(), &pb.SendConfirmationRequest{})
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+}
+
 func TestServerClient_recoversFromPanic(t *testing.T) {
 	addr := startServer(t, "s3cret", &fakeNotifier{panicNext: true})
 	conn, err := platform.Dial(addr, "s3cret")

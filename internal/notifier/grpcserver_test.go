@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
 	pb "github.com/Andriy-Sydorenko/repo-release-notifier/proto/gen/notifierpb"
@@ -36,7 +38,7 @@ func TestGRPCServer_SendConfirmation_mapsArgsAndAck(t *testing.T) {
 	})
 
 	ack, err := srv.SendConfirmation(context.Background(), &pb.SendConfirmationRequest{
-		Email: "a@b.com", Repo: "o/r", ConfirmToken: "ct", UnsubscribeToken: "ut",
+		Email: "a@b.com", Repo: "o/r", ConfirmUrl: "ct", UnsubscribeUrl: "ut",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, uint32(1), ack.GetSent())
@@ -60,8 +62,8 @@ func TestGRPCServer_SendReleaseNotifications_mapsRecipients(t *testing.T) {
 	ack, err := srv.SendReleaseNotifications(context.Background(), &pb.SendReleaseNotificationsRequest{
 		Repo: "o/r", Tag: "v1", NotesUrl: "https://n",
 		Recipients: []*pb.Recipient{
-			{Email: "x@y.com", UnsubscribeToken: "u1"},
-			{Email: "z@y.com", UnsubscribeToken: "u2"},
+			{Email: "x@y.com", UnsubscribeUrl: "u1"},
+			{Email: "z@y.com", UnsubscribeUrl: "u2"},
 		},
 	})
 	require.NoError(t, err)
@@ -71,7 +73,7 @@ func TestGRPCServer_SendReleaseNotifications_mapsRecipients(t *testing.T) {
 	assert.Equal(t, "v1", gotTag)
 	assert.Equal(t, "https://n", gotNotes)
 	require.Len(t, gotRecipients, 2)
-	assert.Equal(t, notifier.Recipient{Email: "x@y.com", UnsubscribeToken: "u1"}, gotRecipients[0])
+	assert.Equal(t, notifier.Recipient{Email: "x@y.com", UnsubscribeURL: "u1"}, gotRecipients[0])
 }
 
 func TestGRPCServer_SendConfirmation_propagatesError(t *testing.T) {
@@ -82,4 +84,6 @@ func TestGRPCServer_SendConfirmation_propagatesError(t *testing.T) {
 	})
 	_, err := srv.SendConfirmation(context.Background(), &pb.SendConfirmationRequest{})
 	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.NotContains(t, err.Error(), "render failed") // internal detail must not leak to clients
 }

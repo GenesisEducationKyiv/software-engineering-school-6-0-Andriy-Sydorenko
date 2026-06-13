@@ -57,7 +57,7 @@ func run() error {
 		return fmt.Errorf("dial notifier: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
-	notifierClient := notifierclient.NewAdapter(pb.NewNotifierServiceClient(conn))
+	notifierClient := notifierclient.NewAdapter(pb.NewNotifierServiceClient(conn), cfg.BaseURL)
 
 	// scanner owns watched_repo + the GitHub boundary (ValidateRepo + fetch).
 	scan := scanner.New(nil, scanner.NewRepository(db), fetcher, notifierClient, &cfg.Scanner)

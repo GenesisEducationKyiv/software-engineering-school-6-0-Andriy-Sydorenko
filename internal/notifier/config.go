@@ -29,7 +29,6 @@ func LoadServiceConfig() (*ServiceConfig, error) {
 		Port:     platform.GetOrDefault("SMTP_PORT", "587"),
 		Username: platform.GetOrDefault("SMTP_USERNAME", ""),
 		Password: platform.GetOrDefault("SMTP_PASSWORD", ""),
-		BaseURL:  platform.GetOrDefault("BASE_URL", "http://localhost:8080"),
 	}
 	if smtp.Host == "" || smtp.Username == "" || smtp.Password == "" {
 		return nil, fmt.Errorf("SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD are required")

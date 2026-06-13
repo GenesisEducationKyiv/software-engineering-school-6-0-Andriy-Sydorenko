@@ -133,6 +133,12 @@ is the only place that wires the whole graph together.
 
 ### Subscribe
 
+`POST /api/subscribe` and `GET /api/subscriptions` are public (unauthenticated)
+by design — there is no account model. Both are per-IP rate-limited (token
+bucket: burst 5, 1 req/s) so a single source can't bomb arbitrary inboxes with
+confirmation mail or rapidly enumerate subscriptions. Double opt-in is the
+second line: an unconfirmed subscription never receives release mail.
+
 `POST /api/subscribe` takes `{email, repo}`. The service:
 
 1. Validates `repo` against `^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$`.
@@ -315,7 +321,7 @@ service that reads them.
 | `INTERNAL_API_TOKEN` | **both** | `dev-internal-token` | shared bearer secret on the gRPC hop (must match) |
 | `NOTIFIER_GRPC_ADDR` | notifier | `:50051` | gRPC listen addr (internal only) |
 | `ADMIN_ADDR` | notifier | `:8081` | admin HTTP (`/health` + `/metrics`) |
-| `BASE_URL` | notifier | `http://localhost:8080` | base for email links |
+| `BASE_URL` | core | `http://localhost:8080` | base for email links (core renders confirm/unsubscribe URLs; the notifier no longer knows it) |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | notifier | — | email transport (required on the notifier) |
 | `LOG_LEVEL` / `LOG_FORMAT` | both | `info` / `text` | logging |
 

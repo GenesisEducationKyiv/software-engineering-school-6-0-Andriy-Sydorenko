@@ -37,21 +37,24 @@ type NotifierClient interface {
 
 // Adapter maps the core's plain types to notifierpb and back. It wraps a
 // generated client built from platform.Dial; auth + correlation ride in the
-// client interceptors configured there, so this layer stays pure mapping.
+// client interceptors configured there. It also resolves the core's own
+// confirm/unsubscribe tokens to absolute URLs (against baseURL) before sending,
+// so the notifier never learns the core's BASE_URL or route scheme.
 type Adapter struct {
-	pb pb.NotifierServiceClient
+	pb      pb.NotifierServiceClient
+	baseURL string
 }
 
-func NewAdapter(client pb.NotifierServiceClient) *Adapter {
-	return &Adapter{pb: client}
+func NewAdapter(client pb.NotifierServiceClient, baseURL string) *Adapter {
+	return &Adapter{pb: client, baseURL: baseURL}
 }
 
 func (a *Adapter) SendConfirmation(ctx context.Context, email, repo, confirmToken, unsubscribeToken string) error {
 	_, err := a.pb.SendConfirmation(ctx, &pb.SendConfirmationRequest{
-		Email:            email,
-		Repo:             repo,
-		ConfirmToken:     confirmToken,
-		UnsubscribeToken: unsubscribeToken,
+		Email:          email,
+		Repo:           repo,
+		ConfirmUrl:     a.confirmURL(confirmToken),
+		UnsubscribeUrl: a.unsubscribeURL(unsubscribeToken),
 	})
 	if err != nil {
 		return fmt.Errorf("notifier SendConfirmation: %w", err)
@@ -63,8 +66,8 @@ func (a *Adapter) SendReleaseNotifications(ctx context.Context, repo, tag, notes
 	pbRecipients := make([]*pb.Recipient, 0, len(recipients))
 	for _, r := range recipients {
 		pbRecipients = append(pbRecipients, &pb.Recipient{
-			Email:            r.Email,
-			UnsubscribeToken: r.UnsubscribeToken,
+			Email:          r.Email,
+			UnsubscribeUrl: a.unsubscribeURL(r.UnsubscribeToken),
 		})
 	}
 	_, err := a.pb.SendReleaseNotifications(ctx, &pb.SendReleaseNotificationsRequest{
@@ -77,6 +80,16 @@ func (a *Adapter) SendReleaseNotifications(ctx context.Context, repo, tag, notes
 		return fmt.Errorf("notifier SendReleaseNotifications: %w", err)
 	}
 	return nil
+}
+
+// confirmURL / unsubscribeURL resolve a bare token to an absolute link against
+// the core's own BASE_URL — the only place the route scheme is known.
+func (a *Adapter) confirmURL(token string) string {
+	return fmt.Sprintf("%s/api/confirm/%s", a.baseURL, token)
+}
+
+func (a *Adapter) unsubscribeURL(token string) string {
+	return fmt.Sprintf("%s/api/unsubscribe/%s", a.baseURL, token)
 }
 
 var _ NotifierClient = (*Adapter)(nil)

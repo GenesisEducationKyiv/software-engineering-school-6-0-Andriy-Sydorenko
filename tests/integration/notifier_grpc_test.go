@@ -76,7 +76,6 @@ func TestNotifierGRPC_SendConfirmation_deliversToMailpit(t *testing.T) {
 			Port:     smtpPort,
 			Username: "notify@example.com", // Mailpit accepts any creds
 			Password: "x",
-			BaseURL:  "https://notify.example.com",
 		},
 	)
 	addr := startNotifier(t, core)
@@ -84,7 +83,7 @@ func TestNotifierGRPC_SendConfirmation_deliversToMailpit(t *testing.T) {
 	conn, err := platform.Dial(addr, internalToken)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	client := notifierclient.NewAdapter(pb.NewNotifierServiceClient(conn))
+	client := notifierclient.NewAdapter(pb.NewNotifierServiceClient(conn), "https://notify.example.com")
 
 	to := "subscriber@example.com"
 	require.NoError(
@@ -99,13 +98,13 @@ func TestNotifierGRPC_SendConfirmation_deliversToMailpit(t *testing.T) {
 
 func TestNotifierGRPC_SendReleaseNotifications_batchCountsRoundTrip(t *testing.T) {
 	// Stubbed mailer: assert the batch wire round-trip + ack mapping, not SMTP.
-	core := notifier.NewCoreWithMailer("https://notify.example.com", stubOKMailer{})
+	core := notifier.NewCoreWithMailer(stubOKMailer{})
 	addr := startNotifier(t, core)
 
 	conn, err := platform.Dial(addr, internalToken)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	client := notifierclient.NewAdapter(pb.NewNotifierServiceClient(conn))
+	client := notifierclient.NewAdapter(pb.NewNotifierServiceClient(conn), "https://notify.example.com")
 
 	err = client.SendReleaseNotifications(
 		context.Background(), "golang/go", "v1.24.0", "https://n",

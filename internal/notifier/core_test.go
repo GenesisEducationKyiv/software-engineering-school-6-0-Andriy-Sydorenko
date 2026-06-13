@@ -31,27 +31,30 @@ func (s *stubMailer) Send(_ context.Context, msg Message) error {
 	return nil
 }
 
+const testConfirmURL = "https://notify.example.com/api/confirm/ctok"
+const testUnsubURL = "https://notify.example.com/api/unsubscribe/utok"
+
 func newTestCore(m Mailer) *Core {
-	return &Core{composer: NewComposer("https://notify.example.com"), mailer: m}
+	return &Core{composer: NewComposer(), mailer: m}
 }
 
 func TestCore_SendConfirmation_ok(t *testing.T) {
 	m := &stubMailer{}
 	c := newTestCore(m)
 
-	sent, failed, err := c.SendConfirmation(context.Background(), "a@b.com", "golang/go", "ctok", "utok")
+	sent, failed, err := c.SendConfirmation(context.Background(), "a@b.com", "golang/go", testConfirmURL, testUnsubURL)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(1), sent)
 	assert.Equal(t, uint32(0), failed)
 
 	require.Len(t, m.sent, 1)
 	assert.Equal(t, "a@b.com", m.sent[0].To)
-	assert.Contains(t, m.sent[0].PlainBody, "https://notify.example.com/api/confirm/ctok")
+	assert.Contains(t, m.sent[0].PlainBody, testConfirmURL)
 }
 
 func TestCore_SendConfirmation_mailerError(t *testing.T) {
 	c := newTestCore(&stubMailer{failFor: "a@b.com"})
-	sent, failed, err := c.SendConfirmation(context.Background(), "a@b.com", "golang/go", "ctok", "utok")
+	sent, failed, err := c.SendConfirmation(context.Background(), "a@b.com", "golang/go", testConfirmURL, testUnsubURL)
 	require.NoError(t, err) // failures are counted, not returned
 	assert.Equal(t, uint32(0), sent)
 	assert.Equal(t, uint32(1), failed)
@@ -62,9 +65,9 @@ func TestCore_SendReleaseNotifications_batch(t *testing.T) {
 	c := newTestCore(m)
 
 	recipients := []Recipient{
-		{Email: "good1@x.com", UnsubscribeToken: "u1"},
-		{Email: "bad@x.com", UnsubscribeToken: "u2"},
-		{Email: "good2@x.com", UnsubscribeToken: "u3"},
+		{Email: "good1@x.com", UnsubscribeURL: "u1"},
+		{Email: "bad@x.com", UnsubscribeURL: "u2"},
+		{Email: "good2@x.com", UnsubscribeURL: "u3"},
 	}
 	sent, failed, err := c.SendReleaseNotifications(context.Background(), "golang/go", "v1.24.0", "", recipients)
 	require.NoError(t, err)

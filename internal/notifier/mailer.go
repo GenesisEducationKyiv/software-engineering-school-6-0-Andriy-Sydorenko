@@ -7,13 +7,12 @@ import (
 	"strings"
 )
 
-// Config is the notifier's SMTP + email config.
+// Config is the notifier's SMTP config.
 type Config struct {
 	Host     string
 	Port     string
 	Username string
 	Password string
-	BaseURL  string
 }
 
 type Message struct {

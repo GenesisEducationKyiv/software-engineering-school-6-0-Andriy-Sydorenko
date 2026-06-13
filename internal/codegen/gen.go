@@ -13,3 +13,4 @@ package codegen
 //go:generate go tool mockgen -source=../github/cached_client.go -destination=../github/mocks/github_mocks.go   -package=mocks
 //go:generate go tool mockgen -source=../scanner/scanner.go      -destination=../scanner/mocks/scanner_mocks.go -package=mocks
 //go:generate go tool mockgen -source=../subscription/subscription.go -destination=../subscription/mocks/subscription_mocks.go -package=mocks
+//go:generate go tool mockgen -source=../notifierclient/client.go -destination=../notifierclient/mocks/notifierclient_mocks.go -package=mocks

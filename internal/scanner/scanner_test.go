@@ -11,6 +11,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifierclient"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner/mocks"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
 )
@@ -19,7 +20,7 @@ type fixture struct {
 	subs     *mocks.MockSubscriberLister
 	store    *mocks.MockWatchedRepoStore
 	github   *mocks.MockReleaseFetcher
-	notifier *mocks.MockReleaseNotifier
+	notifier *mocks.MockReleaseSender
 	scanner  *Scanner
 }
 
@@ -30,7 +31,7 @@ func newFixture(t *testing.T) *fixture {
 		subs:     mocks.NewMockSubscriberLister(ctrl),
 		store:    mocks.NewMockWatchedRepoStore(ctrl),
 		github:   mocks.NewMockReleaseFetcher(ctrl),
-		notifier: mocks.NewMockReleaseNotifier(ctrl),
+		notifier: mocks.NewMockReleaseSender(ctrl),
 	}
 	// Concurrency=1: deterministic dispatch. Parallelism: workerpool_test.go.
 	f.scanner = New(f.subs, f.store, f.github, f.notifier, &Config{Interval: time.Minute, Concurrency: 1})
@@ -47,8 +48,13 @@ func TestNewReleaseNotifiesAll(t *testing.T) {
 		{Email: "b@x.com", UnsubscribeToken: "uB"},
 	}, nil)
 	f.store.EXPECT().UpsertLastSeenTag(gomock.Any(), "golang/go", "v1.1").Return(nil)
-	f.notifier.EXPECT().SendReleaseNotification(gomock.Any(), "a@x.com", "golang/go", "v1.1", "uA").Return(nil)
-	f.notifier.EXPECT().SendReleaseNotification(gomock.Any(), "b@x.com", "golang/go", "v1.1", "uB").Return(nil)
+	f.notifier.EXPECT().SendReleaseNotifications(
+		gomock.Any(), "golang/go", "v1.1", "https://github.com/golang/go/releases/tag/v1.1",
+		[]notifierclient.Recipient{
+			{Email: "a@x.com", UnsubscribeToken: "uA"},
+			{Email: "b@x.com", UnsubscribeToken: "uB"},
+		},
+	).Return(nil)
 
 	f.scanner.runOnce(context.Background())
 }
@@ -102,7 +108,10 @@ func TestInvalidRepoFormatContinues(t *testing.T) {
 		{Email: "a@x.com", UnsubscribeToken: ""},
 	}, nil)
 	f.store.EXPECT().UpsertLastSeenTag(gomock.Any(), "golang/go", "v1.1").Return(nil)
-	f.notifier.EXPECT().SendReleaseNotification(gomock.Any(), "a@x.com", "golang/go", "v1.1", "").Return(nil)
+	f.notifier.EXPECT().SendReleaseNotifications(
+		gomock.Any(), "golang/go", "v1.1", "https://github.com/golang/go/releases/tag/v1.1",
+		[]notifierclient.Recipient{{Email: "a@x.com", UnsubscribeToken: ""}},
+	).Return(nil)
 
 	f.scanner.runOnce(context.Background())
 }
@@ -128,7 +137,7 @@ func TestSafeCheckRepoRecoversFromPanic(t *testing.T) {
 	subs := mocks.NewMockSubscriberLister(ctrl)
 	store := mocks.NewMockWatchedRepoStore(ctrl)
 	github := mocks.NewMockReleaseFetcher(ctrl)
-	notifier := mocks.NewMockReleaseNotifier(ctrl)
+	notifier := mocks.NewMockReleaseSender(ctrl)
 
 	github.EXPECT().GetLatestRelease(gomock.Any(), "owner", "repo").Do(
 		func(_ context.Context, _, _ string) { panic("boom") },
@@ -151,7 +160,10 @@ func TestPanicInOneRepoDoesNotKillCycle(t *testing.T) {
 		{Email: "ok@x.com", UnsubscribeToken: "u"},
 	}, nil)
 	f.store.EXPECT().UpsertLastSeenTag(gomock.Any(), "good/two", "v2.0").Return(nil)
-	f.notifier.EXPECT().SendReleaseNotification(gomock.Any(), "ok@x.com", "good/two", "v2.0", "u").Return(nil)
+	f.notifier.EXPECT().SendReleaseNotifications(
+		gomock.Any(), "good/two", "v2.0", "https://github.com/good/two/releases/tag/v2.0",
+		[]notifierclient.Recipient{{Email: "ok@x.com", UnsubscribeToken: "u"}},
+	).Return(nil)
 
 	f.scanner.runOnce(context.Background())
 }

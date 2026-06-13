@@ -80,12 +80,18 @@ linters:
             - pkg: github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner
               desc: "subscription must reach the scanner only via an injected interface, not by importing it"
         modules-no-notifier-internals:
+          # lax: everything allowed except deny; allow overrides deny. Needed
+          # because depguard prefix-matches internal/notifier, which would
+          # otherwise also catch the legitimate internal/notifierclient.
+          list-mode: lax
           files:
             - "**/internal/subscription/**"
             - "**/internal/scanner/**"
+          allow:
+            - github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifierclient
           deny:
             - pkg: github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier
-              desc: "subscription/scanner must use the notifier port, not import internal/notifier"
+              desc: "subscription/scanner must use the notifierclient adapter, not import the notifier service-core"
 
   exclusions:
     rules:

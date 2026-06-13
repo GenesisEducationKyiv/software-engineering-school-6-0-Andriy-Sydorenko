@@ -44,8 +44,7 @@ func TestValidate(t *testing.T) {
 			c.DB.User = ""
 			c.DB.Name = ""
 		}, "DATABASE_URL"},
-		{"missing SMTP host", func(c *Config) { c.SMTP.Host = "" }, "SMTP_HOST"},
-		{"missing SMTP username", func(c *Config) { c.SMTP.Username = "" }, "SMTP_HOST"},
+		{"missing internal token", func(c *Config) { c.InternalToken = "" }, "INTERNAL_API_TOKEN"},
 	}
 
 	for _, tc := range tests {
@@ -66,9 +65,7 @@ func TestValidate(t *testing.T) {
 func baseValidConfig() *Config {
 	c := &Config{}
 	c.DB.URL = "postgres://x"
-	c.SMTP.Host = "smtp.example.com"
-	c.SMTP.Username = "u"
-	c.SMTP.Password = "p"
+	c.InternalToken = "internal-token"
 	c.Log = logging.Config{Level: logging.LevelInfo, Format: logging.FormatJSON}
 	return c
 }

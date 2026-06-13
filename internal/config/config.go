@@ -13,7 +13,6 @@ import (
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/cache"
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/db"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/github"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/observability/logging"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/platform"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner"
@@ -24,13 +23,14 @@ const envFile = ".env"
 type Config struct {
 	DB      database.Config
 	Redis   cache.Config
-	SMTP    notifier.Config
 	Scanner scanner.Config
 	GitHub  github.Config
 	Log     logging.Config
 
-	Port   string
-	APIKey string
+	Port          string
+	APIKey        string
+	NotifierAddr  string
+	InternalToken string
 }
 
 func LoadConfig() (*Config, error) {
@@ -56,13 +56,6 @@ func LoadConfig() (*Config, error) {
 			Password: os.Getenv("REDIS_PASSWORD"),
 			DB:       platform.GetOrDefault("REDIS_DB", "0"),
 		},
-		SMTP: notifier.Config{
-			Host:     os.Getenv("SMTP_HOST"),
-			Port:     platform.GetOrDefault("SMTP_PORT", "587"),
-			Username: os.Getenv("SMTP_USERNAME"),
-			Password: os.Getenv("SMTP_PASSWORD"),
-			BaseURL:  platform.GetOrDefault("BASE_URL", "http://localhost:8080"),
-		},
 		Scanner: loadScannerConfig(),
 		GitHub: github.Config{
 			Token:   os.Getenv("GITHUB_TOKEN"),
@@ -73,8 +66,10 @@ func LoadConfig() (*Config, error) {
 			Level:  logging.Level(strings.ToLower(platform.GetOrDefault("LOG_LEVEL", "info"))),
 			Format: logging.Format(strings.ToLower(platform.GetOrDefault("LOG_FORMAT", "text"))),
 		},
-		Port:   platform.GetOrDefault("PORT", "8080"),
-		APIKey: os.Getenv("API_KEY"),
+		Port:          platform.GetOrDefault("PORT", "8080"),
+		APIKey:        os.Getenv("API_KEY"),
+		NotifierAddr:  platform.GetOrDefault("NOTIFIER_ADDR", "notifier:50051"),
+		InternalToken: os.Getenv("INTERNAL_API_TOKEN"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -100,8 +95,8 @@ func (c *Config) validate() error {
 	if c.DB.URL == "" && (c.DB.User == "" || c.DB.Name == "") {
 		return fmt.Errorf("either DATABASE_URL or DB_USER+DB_NAME (with DB_HOST/DB_PORT/DB_PASSWORD) must be set")
 	}
-	if c.SMTP.Host == "" || c.SMTP.Username == "" || c.SMTP.Password == "" {
-		return fmt.Errorf("SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD are required")
+	if c.InternalToken == "" {
+		return fmt.Errorf("INTERNAL_API_TOKEN is required (core dials the notifier service)")
 	}
 	if err := c.Log.Validate(); err != nil {
 		return err

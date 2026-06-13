@@ -17,10 +17,12 @@ import (
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/db"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
 	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/github"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifierclient"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/observability/logging"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/platform"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
+	pb "github.com/Andriy-Sydorenko/repo-release-notifier/proto/gen/notifierpb"
 )
 
 func main() {
@@ -49,16 +51,22 @@ func run() error {
 	}
 
 	gh, fetcher := buildGitHubClients(cfg)
-	note := notifier.New(&cfg.SMTP)
+
+	conn, err := platform.Dial(cfg.NotifierAddr, cfg.InternalToken)
+	if err != nil {
+		return fmt.Errorf("dial notifier: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	notifierClient := notifierclient.NewAdapter(pb.NewNotifierServiceClient(conn))
 
 	// scanner owns watched_repo + the GitHub boundary (ValidateRepo + fetch).
-	scan := scanner.New(nil, scanner.NewRepository(db), fetcher, note, &cfg.Scanner)
+	scan := scanner.New(nil, scanner.NewRepository(db), fetcher, notifierClient, &cfg.Scanner)
 	scan.SetValidator(gh)
 
 	// subscription owns subscriptions + tokens; reaches the scanner only through
 	// the validator adapter (the public ValidateRepo, port-shaped).
 	subRepo := subscription.NewRepository(db)
-	svc := subscription.New(subRepo, scannerValidator{scan}, note, subscription.RandomToken)
+	svc := subscription.New(subRepo, scannerValidator{scan}, notifierClient, subscription.RandomToken)
 
 	// Close the bidirectional loop: the scanner's scan-path reads come from the
 	// subscription module's public API.

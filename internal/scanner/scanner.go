@@ -3,12 +3,14 @@ package scanner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifierclient"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
 )
 
@@ -36,8 +38,10 @@ type ReleaseFetcher interface {
 	GetLatestRelease(ctx context.Context, owner, repo string) (string, error)
 }
 
-type ReleaseNotifier interface {
-	SendReleaseNotification(ctx context.Context, email, repo, tag, unsubscribeToken string) error
+// ReleaseSender sends one detected release to all confirmed subscribers in a
+// single batched call. Implemented by the core's notifierclient.Adapter.
+type ReleaseSender interface {
+	SendReleaseNotifications(ctx context.Context, repo, tag, notesURL string, recipients []notifierclient.Recipient) error
 }
 
 // Config bundles scanner knobs. The per-GitHub-call deadline lives on the
@@ -60,7 +64,7 @@ type Scanner struct {
 	subs      SubscriberLister
 	store     WatchedRepoStore
 	github    ReleaseFetcher
-	notifier  ReleaseNotifier
+	notifier  ReleaseSender
 	validator RepoValidator
 	pool      *WorkerPool
 	cfg       Config
@@ -70,7 +74,7 @@ func New(
 	subs SubscriberLister,
 	store WatchedRepoStore,
 	github ReleaseFetcher,
-	notifier ReleaseNotifier,
+	notifier ReleaseSender,
 	cfg *Config,
 ) *Scanner {
 	cfg.withDefaults()
@@ -239,22 +243,27 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		return err
 	}
 
-	for i := range subs {
-		sub := subs[i]
-		if err := s.notifier.SendReleaseNotification(
-			ctx,
-			sub.Email,
-			repo,
-			tag,
-			sub.UnsubscribeToken,
-		); err != nil {
-			slog.ErrorContext(
-				ctx, "scanner: failed to send release notification",
-				"repo", repo,
-				"tag", tag,
-				"err", err,
-			)
+	if len(subs) == 0 {
+		return nil
+	}
+
+	recipients := make([]notifierclient.Recipient, len(subs))
+	for i, sub := range subs {
+		recipients[i] = notifierclient.Recipient{
+			Email:            sub.Email,
+			UnsubscribeToken: sub.UnsubscribeToken,
 		}
+	}
+
+	releaseURL := fmt.Sprintf("https://github.com/%s/releases/tag/%s", repo, tag)
+	if err := s.notifier.SendReleaseNotifications(ctx, repo, tag, releaseURL, recipients); err != nil {
+		slog.ErrorContext(
+			ctx, "scanner: failed to send release notifications",
+			"repo", repo,
+			"tag", tag,
+			"count", len(recipients),
+			"err", err,
+		)
 	}
 
 	return nil

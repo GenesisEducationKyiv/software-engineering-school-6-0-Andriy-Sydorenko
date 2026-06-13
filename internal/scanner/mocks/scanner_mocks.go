@@ -13,6 +13,7 @@ import (
 	context "context"
 	reflect "reflect"
 
+	notifierclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifierclient"
 	subscription "github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -202,40 +203,40 @@ func (mr *MockReleaseFetcherMockRecorder) GetLatestRelease(ctx, owner, repo any)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLatestRelease", reflect.TypeOf((*MockReleaseFetcher)(nil).GetLatestRelease), ctx, owner, repo)
 }
 
-// MockReleaseNotifier is a mock of ReleaseNotifier interface.
-type MockReleaseNotifier struct {
+// MockReleaseSender is a mock of ReleaseSender interface.
+type MockReleaseSender struct {
 	ctrl     *gomock.Controller
-	recorder *MockReleaseNotifierMockRecorder
+	recorder *MockReleaseSenderMockRecorder
 	isgomock struct{}
 }
 
-// MockReleaseNotifierMockRecorder is the mock recorder for MockReleaseNotifier.
-type MockReleaseNotifierMockRecorder struct {
-	mock *MockReleaseNotifier
+// MockReleaseSenderMockRecorder is the mock recorder for MockReleaseSender.
+type MockReleaseSenderMockRecorder struct {
+	mock *MockReleaseSender
 }
 
-// NewMockReleaseNotifier creates a new mock instance.
-func NewMockReleaseNotifier(ctrl *gomock.Controller) *MockReleaseNotifier {
-	mock := &MockReleaseNotifier{ctrl: ctrl}
-	mock.recorder = &MockReleaseNotifierMockRecorder{mock}
+// NewMockReleaseSender creates a new mock instance.
+func NewMockReleaseSender(ctrl *gomock.Controller) *MockReleaseSender {
+	mock := &MockReleaseSender{ctrl: ctrl}
+	mock.recorder = &MockReleaseSenderMockRecorder{mock}
 	return mock
 }
 
 // EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockReleaseNotifier) EXPECT() *MockReleaseNotifierMockRecorder {
+func (m *MockReleaseSender) EXPECT() *MockReleaseSenderMockRecorder {
 	return m.recorder
 }
 
-// SendReleaseNotification mocks base method.
-func (m *MockReleaseNotifier) SendReleaseNotification(ctx context.Context, email, repo, tag, unsubscribeToken string) error {
+// SendReleaseNotifications mocks base method.
+func (m *MockReleaseSender) SendReleaseNotifications(ctx context.Context, repo, tag, notesURL string, recipients []notifierclient.Recipient) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SendReleaseNotification", ctx, email, repo, tag, unsubscribeToken)
+	ret := m.ctrl.Call(m, "SendReleaseNotifications", ctx, repo, tag, notesURL, recipients)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// SendReleaseNotification indicates an expected call of SendReleaseNotification.
-func (mr *MockReleaseNotifierMockRecorder) SendReleaseNotification(ctx, email, repo, tag, unsubscribeToken any) *gomock.Call {
+// SendReleaseNotifications indicates an expected call of SendReleaseNotifications.
+func (mr *MockReleaseSenderMockRecorder) SendReleaseNotifications(ctx, repo, tag, notesURL, recipients any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendReleaseNotification", reflect.TypeOf((*MockReleaseNotifier)(nil).SendReleaseNotification), ctx, email, repo, tag, unsubscribeToken)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendReleaseNotifications", reflect.TypeOf((*MockReleaseSender)(nil).SendReleaseNotifications), ctx, repo, tag, notesURL, recipients)
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifierclient"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/scanner"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
 )
@@ -22,11 +23,11 @@ func (s stubFetcher) GetLatestRelease(_ context.Context, _, _ string) (string, e
 	return s.tag, nil
 }
 
-// recordingNotifier counts release sends.
+// recordingNotifier counts release recipients across batched sends.
 type recordingNotifier struct{ sends int }
 
-func (n *recordingNotifier) SendReleaseNotification(_ context.Context, _, _, _, _ string) error {
-	n.sends++
+func (n *recordingNotifier) SendReleaseNotifications(_ context.Context, _, _, _ string, recipients []notifierclient.Recipient) error {
+	n.sends += len(recipients)
 	return nil
 }
 

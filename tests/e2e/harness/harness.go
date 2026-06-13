@@ -17,20 +17,25 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"google.golang.org/grpc"
 	"gorm.io/gorm"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/api"
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/db"
 	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/github"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifierclient"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/platform"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/subscription"
+	pb "github.com/Andriy-Sydorenko/repo-release-notifier/proto/gen/notifierpb"
 )
 
 const (
-	DefaultAPIKey     = "test-key"
-	pgImage           = "postgres:16-alpine"
-	mailpitImage      = "axllent/mailpit:v1.20"
-	containerStartTTL = 90 * time.Second
+	DefaultAPIKey        = "test-key"
+	harnessInternalToken = "harness-internal-token"
+	pgImage              = "postgres:16-alpine"
+	mailpitImage         = "axllent/mailpit:v1.20"
+	containerStartTTL    = 90 * time.Second
 )
 
 type Harness struct {
@@ -42,10 +47,12 @@ type Harness struct {
 	DB             *gorm.DB
 	GitHub         *GitHubFixture
 
-	pgC      testcontainers.Container
-	mailC    testcontainers.Container
-	browserC testcontainers.Container
-	srv      *http.Server
+	pgC          testcontainers.Container
+	mailC        testcontainers.Container
+	browserC     testcontainers.Container
+	srv          *http.Server
+	notifierSrv  *grpc.Server
+	notifierConn *grpc.ClientConn
 }
 
 type Options struct {
@@ -99,16 +106,26 @@ func New(t *testing.T, opts ...Options) *Harness {
 	}
 
 	repo := subscription.NewRepository(db)
-	note := notifier.New(
-		&notifier.Config{
-			Host:     smtpAddr.host,
-			Port:     smtpAddr.port,
-			Username: "harness@example.com",
-			Password: "harness",
-			BaseURL:  baseURL,
-		},
-	)
-	svc := subscription.New(repo, gh, note, subscription.RandomToken)
+
+	// Stand up the notifier as a real in-process gRPC service (the production
+	// boundary) pointed at Mailpit, then dial it the way the core does.
+	core := notifier.NewCore(&notifier.Config{
+		Host:     smtpAddr.host,
+		Port:     smtpAddr.port,
+		Username: "harness@example.com",
+		Password: "harness",
+		BaseURL:  baseURL,
+	})
+	notifierLis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	notifierSrv := platform.NewServer(harnessInternalToken)
+	pb.RegisterNotifierServiceServer(notifierSrv, notifier.NewGRPCServer(core))
+	go func() { _ = notifierSrv.Serve(notifierLis) }()
+	notifierConn, err := platform.Dial(notifierLis.Addr().String(), harnessInternalToken)
+	require.NoError(t, err)
+	notifierClient := notifierclient.NewAdapter(pb.NewNotifierServiceClient(notifierConn))
+
+	svc := subscription.New(repo, gh, notifierClient, subscription.RandomToken)
 	router := api.NewRouter(api.NewHandler(svc), o.APIKey)
 
 	srv := &http.Server{
@@ -136,6 +153,8 @@ func New(t *testing.T, opts ...Options) *Harness {
 		mailC:          mailC,
 		browserC:       browserC,
 		srv:            srv,
+		notifierSrv:    notifierSrv,
+		notifierConn:   notifierConn,
 	}
 	waitForHealth(t, h.BaseURL)
 	t.Cleanup(h.shutdown)
@@ -160,6 +179,12 @@ func (h *Harness) shutdown() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = h.srv.Shutdown(shutdownCtx)
+	if h.notifierConn != nil {
+		_ = h.notifierConn.Close()
+	}
+	if h.notifierSrv != nil {
+		h.notifierSrv.GracefulStop()
+	}
 	if h.GitHub != nil {
 		h.GitHub.close()
 	}

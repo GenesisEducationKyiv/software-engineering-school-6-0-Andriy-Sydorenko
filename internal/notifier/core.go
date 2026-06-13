@@ -28,6 +28,13 @@ func NewCore(cfg *Config) *Core {
 	}
 }
 
+// NewCoreWithMailer builds a Core with an explicit Mailer. Used where the mailer
+// must be substituted (benchmarks, integration tests that assert transport
+// without hitting SMTP).
+func NewCoreWithMailer(baseURL string, mailer Mailer) *Core {
+	return &Core{composer: NewComposer(baseURL), mailer: mailer}
+}
+
 // SendConfirmation renders + sends one confirmation email. A render failure is
 // returned (a programming/template bug, not a transient send error); a send
 // failure is counted in failed and not returned, so the caller's single

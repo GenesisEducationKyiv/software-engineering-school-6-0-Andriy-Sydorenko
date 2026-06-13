@@ -5,5 +5,5 @@
 CREATE TABLE IF NOT EXISTS watched_repo (
     repo            TEXT        PRIMARY KEY,
     last_seen_tag   TEXT        NOT NULL DEFAULT '',
-    last_polled_at  TIMESTAMPTZ
+    last_polled_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );

@@ -111,7 +111,6 @@ func New(t *testing.T, opts ...Options) *Harness {
 		Port:     smtpAddr.port,
 		Username: "harness@example.com",
 		Password: "harness",
-		BaseURL:  baseURL,
 	})
 	notifierLis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -120,7 +119,7 @@ func New(t *testing.T, opts ...Options) *Harness {
 	go func() { _ = notifierSrv.Serve(notifierLis) }()
 	notifierConn, err := platform.Dial(notifierLis.Addr().String(), harnessInternalToken)
 	require.NoError(t, err)
-	notifierClient := notifierclient.NewAdapter(pb.NewNotifierServiceClient(notifierConn))
+	notifierClient := notifierclient.NewAdapter(pb.NewNotifierServiceClient(notifierConn), baseURL)
 
 	svc := subscription.New(repo, gh, notifierClient, subscription.RandomToken)
 	router := api.NewRouter(api.NewHandler(svc))

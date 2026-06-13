@@ -34,21 +34,21 @@ func (s *stubMailer) Send(_ context.Context, _ notifier.Message) error {
 
 // newCore builds the Core shared by both transports, over a fresh stub mailer.
 func newCore() *notifier.Core {
-	return notifier.NewCoreWithMailer(baseURL, &stubMailer{})
+	return notifier.NewCoreWithMailer(&stubMailer{})
 }
 
 // --- JSON request/response shapes, mirroring the proto messages field-for-field.
 
 type jsonRecipient struct {
-	Email            string `json:"email"`
-	UnsubscribeToken string `json:"unsubscribe_token"`
+	Email          string `json:"email"`
+	UnsubscribeURL string `json:"unsubscribe_url"`
 }
 
 type jsonSendConfirmationRequest struct {
-	Email            string `json:"email"`
-	Repo             string `json:"repo"`
-	ConfirmToken     string `json:"confirm_token"`
-	UnsubscribeToken string `json:"unsubscribe_token"`
+	Email          string `json:"email"`
+	Repo           string `json:"repo"`
+	ConfirmURL     string `json:"confirm_url"`
+	UnsubscribeURL string `json:"unsubscribe_url"`
 }
 
 type jsonSendReleaseNotificationsRequest struct {
@@ -66,9 +66,12 @@ type jsonSendAck struct {
 // --- Canonical workload builders. Deterministic, so every transport/run sees
 //     identical bytes.
 
-// confirmationFields returns the fixed SendConfirmation workload.
-func confirmationFields() (email, repo, confirmToken, unsubscribeToken string) {
-	return "subscriber@example.com", "golang/go", "confirm-tok-abcdef0123456789", "unsub-tok-9876543210fedcba"
+// confirmationFields returns the fixed SendConfirmation workload. Links are
+// pre-rendered (as the core now does) so the payload reflects real URL lengths.
+func confirmationFields() (email, repo, confirmURL, unsubscribeURL string) {
+	return "subscriber@example.com", "golang/go",
+		baseURL + "/api/confirm/confirm-tok-abcdef0123456789",
+		baseURL + "/api/unsubscribe/unsub-tok-9876543210fedcba"
 }
 
 // releaseFields returns the fixed (repo, tag, notesURL) for the release workload.
@@ -82,8 +85,8 @@ func makeRecipients(n int) []notifier.Recipient {
 	rs := make([]notifier.Recipient, n)
 	for i := range rs {
 		rs[i] = notifier.Recipient{
-			Email:            fmt.Sprintf("subscriber%08d@example.com", i),
-			UnsubscribeToken: fmt.Sprintf("unsub-token-%016x", i),
+			Email:          fmt.Sprintf("subscriber%08d@example.com", i),
+			UnsubscribeURL: fmt.Sprintf("%s/api/unsubscribe/unsub-token-%016x", baseURL, i),
 		}
 	}
 	return rs

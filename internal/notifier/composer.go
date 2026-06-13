@@ -8,25 +8,24 @@ import (
 )
 
 // Zero-width space inserted after the URL scheme to prevent mail clients
-// from auto-linkifying the "copy this link" text.
-const zwsp = "\u200b"
+// from auto-linkifying the "copy this link" text. Built from a rune so the
+// source carries no invisible character (staticcheck ST1018).
+var zwsp = string(rune(0x200B))
 
 func breakAutoLink(url string) string {
 	return strings.Replace(url, "://", zwsp+"://", 1)
 }
 
-type Composer struct {
-	baseURL string
+// Composer renders email bodies from data the core is handed. It owns no URL
+// scheme: confirm/unsubscribe links arrive fully formed (built core-side from
+// the core's own BASE_URL), so the notifier stays ignorant of the core's routes.
+type Composer struct{}
+
+func NewComposer() *Composer {
+	return &Composer{}
 }
 
-func NewComposer(baseURL string) *Composer {
-	return &Composer{baseURL: baseURL}
-}
-
-func (c *Composer) Confirmation(email, repo, token, unsubscribeToken string) (Message, error) {
-	confirmURL := fmt.Sprintf("%s/api/confirm/%s", c.baseURL, token)
-	unsubscribeURL := c.unsubscribeURL(unsubscribeToken)
-
+func (c *Composer) Confirmation(email, repo, confirmURL, unsubscribeURL string) (Message, error) {
 	plain := fmt.Sprintf(
 		"You have subscribed to release notifications for %s.\n\n"+
 			"Please confirm your subscription by clicking the link below:\n%s\n\n"+
@@ -55,9 +54,8 @@ func (c *Composer) Confirmation(email, repo, token, unsubscribeToken string) (Me
 	}, nil
 }
 
-func (c *Composer) Release(email, repo, tag, unsubscribeToken string) (Message, error) {
+func (c *Composer) Release(email, repo, tag, unsubscribeURL string) (Message, error) {
 	releaseURL := fmt.Sprintf("https://github.com/%s/releases/tag/%s", repo, tag)
-	unsubscribeURL := c.unsubscribeURL(unsubscribeToken)
 
 	plain := fmt.Sprintf(
 		"A new release has been published for %s!\n\n"+
@@ -85,10 +83,6 @@ func (c *Composer) Release(email, repo, tag, unsubscribeToken string) (Message, 
 		HTMLBody:  html,
 		Headers:   unsubscribeHeaders(unsubscribeURL),
 	}, nil
-}
-
-func (c *Composer) unsubscribeURL(token string) string {
-	return fmt.Sprintf("%s/api/unsubscribe/%s", c.baseURL, token)
 }
 
 func unsubscribeHeaders(url string) map[string]string {

@@ -13,6 +13,8 @@ import (
 	pb "github.com/Andriy-Sydorenko/repo-release-notifier/proto/gen/notifierpb"
 )
 
+const testBaseURL = "https://notify.example.com"
+
 // stubPB is a hand-written notifierpb.NotifierServiceClient for adapter tests.
 type stubPB struct {
 	conf func(ctx context.Context, in *pb.SendConfirmationRequest, opts ...grpc.CallOption) (*pb.SendAck, error)
@@ -34,14 +36,14 @@ func TestAdapter_SendConfirmation_mapsRequest(t *testing.T) {
 			got = in
 			return &pb.SendAck{Sent: 1}, nil
 		},
-	})
+	}, testBaseURL)
 
 	err := c.SendConfirmation(context.Background(), "a@b.com", "o/r", "ct", "ut")
 	require.NoError(t, err)
 	assert.Equal(t, "a@b.com", got.GetEmail())
 	assert.Equal(t, "o/r", got.GetRepo())
-	assert.Equal(t, "ct", got.GetConfirmToken())
-	assert.Equal(t, "ut", got.GetUnsubscribeToken())
+	assert.Equal(t, testBaseURL+"/api/confirm/ct", got.GetConfirmUrl())
+	assert.Equal(t, testBaseURL+"/api/unsubscribe/ut", got.GetUnsubscribeUrl())
 }
 
 func TestAdapter_SendReleaseNotifications_mapsRecipients(t *testing.T) {
@@ -51,7 +53,7 @@ func TestAdapter_SendReleaseNotifications_mapsRecipients(t *testing.T) {
 			got = in
 			return &pb.SendAck{Sent: 2}, nil
 		},
-	})
+	}, testBaseURL)
 
 	err := c.SendReleaseNotifications(context.Background(), "o/r", "v1", "https://n",
 		[]notifierclient.Recipient{
@@ -64,7 +66,7 @@ func TestAdapter_SendReleaseNotifications_mapsRecipients(t *testing.T) {
 	assert.Equal(t, "https://n", got.GetNotesUrl())
 	require.Len(t, got.GetRecipients(), 2)
 	assert.Equal(t, "x@y.com", got.GetRecipients()[0].GetEmail())
-	assert.Equal(t, "u2", got.GetRecipients()[1].GetUnsubscribeToken())
+	assert.Equal(t, testBaseURL+"/api/unsubscribe/u2", got.GetRecipients()[1].GetUnsubscribeUrl())
 }
 
 func TestAdapter_propagatesError(t *testing.T) {
@@ -72,7 +74,7 @@ func TestAdapter_propagatesError(t *testing.T) {
 		conf: func(_ context.Context, _ *pb.SendConfirmationRequest, _ ...grpc.CallOption) (*pb.SendAck, error) {
 			return nil, errors.New("rpc down")
 		},
-	})
+	}, testBaseURL)
 	err := c.SendConfirmation(context.Background(), "a@b.com", "o/r", "ct", "ut")
 	require.Error(t, err)
 }

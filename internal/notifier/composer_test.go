@@ -11,16 +11,16 @@ import (
 const testBaseURL = "https://notify.example.com"
 
 func TestComposerConfirmation(t *testing.T) {
-	c := NewComposer(testBaseURL)
+	c := NewComposer()
 
-	msg, err := c.Confirmation("user@example.com", "golang/go", "ctoken", "utoken")
+	confirmURL := testBaseURL + "/api/confirm/ctoken"
+	unsubURL := testBaseURL + "/api/unsubscribe/utoken"
+
+	msg, err := c.Confirmation("user@example.com", "golang/go", confirmURL, unsubURL)
 	require.NoError(t, err)
 
 	assert.Equal(t, "user@example.com", msg.To)
 	assert.Contains(t, msg.Subject, "golang/go")
-
-	confirmURL := testBaseURL + "/api/confirm/ctoken"
-	unsubURL := testBaseURL + "/api/unsubscribe/utoken"
 
 	assert.Contains(t, msg.PlainBody, confirmURL)
 	assert.Contains(t, msg.PlainBody, unsubURL)
@@ -37,9 +37,9 @@ func TestComposerConfirmation(t *testing.T) {
 }
 
 func TestComposerRelease(t *testing.T) {
-	c := NewComposer(testBaseURL)
+	c := NewComposer()
 
-	msg, err := c.Release("user@example.com", "golang/go", "v1.24.0", "utoken")
+	msg, err := c.Release("user@example.com", "golang/go", "v1.24.0", testBaseURL+"/api/unsubscribe/utoken")
 	require.NoError(t, err)
 
 	assert.Contains(t, msg.Subject, "v1.24.0")

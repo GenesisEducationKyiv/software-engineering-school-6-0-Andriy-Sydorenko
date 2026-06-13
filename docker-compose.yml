@@ -26,19 +26,21 @@ services:
       retries: 10
 
   # notifier-svc: gRPC notification microservice. INTERNAL ONLY — no published
-  # port. Reuses the shared image; runs the notifier binary. Owns SMTP + the
-  # public BASE_URL used to build email links. Admin HTTP (:8081) serves
+  # port. Reuses the shared image; runs the notifier binary. Owns SMTP only;
+  # email links arrive pre-rendered from the core. Admin HTTP (:8081) serves
   # /health (compose gating) + /metrics (Prometheus).
   notifier:
     build: .
     image: repo-release-notifier:latest
     command: ["/app/notifier"]
     restart: unless-stopped
+    # Exceeds the app's bounded drain (8s gRPC + 10s admin) so SIGKILL never
+    # interrupts an in-flight shutdown.
+    stop_grace_period: 20s
     environment:
       NOTIFIER_GRPC_ADDR: ":50051"
       ADMIN_ADDR: ":8081"
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-dev-internal-token}
-      BASE_URL: ${BASE_URL:-http://localhost:8080}
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME}
@@ -58,6 +60,8 @@ services:
     image: repo-release-notifier:latest
     command: ["/app/server"]
     restart: unless-stopped
+    # Covers the HTTP server's 15s graceful shutdown timeout.
+    stop_grace_period: 20s
     depends_on:
       db:
         condition: service_healthy
@@ -73,6 +77,7 @@ services:
       DB_NAME: ${DB_NAME:-release_notifier}
       DB_SSLMODE: disable
       PORT: 8080
+      BASE_URL: ${BASE_URL:-http://localhost:8080}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       SCAN_INTERVAL: ${SCAN_INTERVAL:-5m}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

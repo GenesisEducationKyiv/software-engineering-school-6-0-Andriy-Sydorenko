@@ -9,11 +9,13 @@ service NotifierService {
   rpc SendReleaseNotifications(SendReleaseNotificationsRequest) returns (SendAck);
 }
 
+// The core renders all app-relative links and passes ready URLs; the notifier
+// neither knows the core's BASE_URL nor its route scheme.
 message SendConfirmationRequest {
   string email = 1;
   string repo = 2;
-  string confirm_token = 3;
-  string unsubscribe_token = 4;
+  string confirm_url = 3;
+  string unsubscribe_url = 4;
 }
 
 // One detected release → fan out to all confirmed subscribers in a single call.
@@ -26,7 +28,7 @@ message SendReleaseNotificationsRequest {
 
 message Recipient {
   string email = 1;
-  string unsubscribe_token = 2;
+  string unsubscribe_url = 2;
 }
 
 message SendAck {

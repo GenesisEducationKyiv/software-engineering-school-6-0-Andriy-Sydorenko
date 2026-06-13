@@ -152,11 +152,11 @@ func TestWireSize(t *testing.T) {
 
 	// SendConfirmation (tiny, fixed).
 	{
-		pbReq := &pb.SendConfirmationRequest{Email: email, Repo: repo, ConfirmToken: ct, UnsubscribeToken: ut}
+		pbReq := &pb.SendConfirmationRequest{Email: email, Repo: repo, ConfirmUrl: ct, UnsubscribeUrl: ut}
 		pbBytes, err := proto.Marshal(pbReq)
 		require.NoError(t, err)
 		jsonBytes, err := json.Marshal(jsonSendConfirmationRequest{
-			Email: email, Repo: repo, ConfirmToken: ct, UnsubscribeToken: ut,
+			Email: email, Repo: repo, ConfirmURL: ct, UnsubscribeURL: ut,
 		})
 		require.NoError(t, err)
 		rows = append(rows, row{"SendConfirmation", 1, len(pbBytes), len(jsonBytes)})
@@ -169,8 +169,8 @@ func TestWireSize(t *testing.T) {
 		pbr := make([]*pb.Recipient, len(recipients))
 		jr := make([]jsonRecipient, len(recipients))
 		for i, r := range recipients {
-			pbr[i] = &pb.Recipient{Email: r.Email, UnsubscribeToken: r.UnsubscribeToken}
-			jr[i] = jsonRecipient{Email: r.Email, UnsubscribeToken: r.UnsubscribeToken}
+			pbr[i] = &pb.Recipient{Email: r.Email, UnsubscribeUrl: r.UnsubscribeURL}
+			jr[i] = jsonRecipient{Email: r.Email, UnsubscribeURL: r.UnsubscribeURL}
 		}
 		pbBytes, err := proto.Marshal(&pb.SendReleaseNotificationsRequest{
 			Repo: rRepo, Tag: rTag, NotesUrl: rNotes, Recipients: pbr,

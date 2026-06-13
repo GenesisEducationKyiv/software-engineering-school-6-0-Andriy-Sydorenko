@@ -34,7 +34,7 @@ func newHTTPHandler(core *notifier.Core) http.Handler {
 			return
 		}
 		sent, failed, err := core.SendConfirmation(
-			r.Context(), req.Email, req.Repo, req.ConfirmToken, req.UnsubscribeToken,
+			r.Context(), req.Email, req.Repo, req.ConfirmURL, req.UnsubscribeURL,
 		)
 		writeAck(w, sent, failed, err)
 	})
@@ -47,7 +47,7 @@ func newHTTPHandler(core *notifier.Core) http.Handler {
 		}
 		recipients := make([]notifier.Recipient, len(req.Recipients))
 		for i, rc := range req.Recipients {
-			recipients[i] = notifier.Recipient{Email: rc.Email, UnsubscribeToken: rc.UnsubscribeToken}
+			recipients[i] = notifier.Recipient{Email: rc.Email, UnsubscribeURL: rc.UnsubscribeURL}
 		}
 		sent, failed, err := core.SendReleaseNotifications(
 			r.Context(), req.Repo, req.Tag, req.NotesURL, recipients,
@@ -133,16 +133,16 @@ func (c *httpClient) post(ctx context.Context, path string, body any) (jsonSendA
 	return ack, nil
 }
 
-func (c *httpClient) sendConfirmation(ctx context.Context, email, repo, ct, ut string) (jsonSendAck, error) {
+func (c *httpClient) sendConfirmation(ctx context.Context, email, repo, confirmURL, unsubscribeURL string) (jsonSendAck, error) {
 	return c.post(ctx, httpPathConfirmation, jsonSendConfirmationRequest{
-		Email: email, Repo: repo, ConfirmToken: ct, UnsubscribeToken: ut,
+		Email: email, Repo: repo, ConfirmURL: confirmURL, UnsubscribeURL: unsubscribeURL,
 	})
 }
 
 func (c *httpClient) sendRelease(ctx context.Context, repo, tag, notesURL string, recipients []notifier.Recipient) (jsonSendAck, error) {
 	jr := make([]jsonRecipient, len(recipients))
 	for i, r := range recipients {
-		jr[i] = jsonRecipient{Email: r.Email, UnsubscribeToken: r.UnsubscribeToken}
+		jr[i] = jsonRecipient{Email: r.Email, UnsubscribeURL: r.UnsubscribeURL}
 	}
 	return c.post(ctx, httpPathRelease, jsonSendReleaseNotificationsRequest{
 		Repo: repo, Tag: tag, NotesURL: notesURL, Recipients: jr,

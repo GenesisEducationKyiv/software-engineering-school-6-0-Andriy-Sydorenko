@@ -30,6 +30,9 @@ type Config struct {
 	Port          string
 	NotifierAddr  string
 	InternalToken string
+	// BaseURL is the core's externally-visible base; it builds the confirm/
+	// unsubscribe links the notifier renders, so the route scheme stays core-side.
+	BaseURL string
 }
 
 func LoadConfig() (*Config, error) {
@@ -68,6 +71,7 @@ func LoadConfig() (*Config, error) {
 		Port:          platform.GetOrDefault("PORT", "8080"),
 		NotifierAddr:  platform.GetOrDefault("NOTIFIER_ADDR", "notifier:50051"),
 		InternalToken: os.Getenv("INTERNAL_API_TOKEN"),
+		BaseURL:       platform.GetOrDefault("BASE_URL", "http://localhost:8080"),
 	}
 
 	if err := cfg.validate(); err != nil {

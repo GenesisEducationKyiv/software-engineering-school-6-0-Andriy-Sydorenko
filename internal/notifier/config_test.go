@@ -22,7 +22,6 @@ func TestLoadServiceConfig_ok(t *testing.T) {
 	assert.Equal(t, ":8081", cfg.AdminAddr)
 	assert.Equal(t, "mail", cfg.SMTP.Host)
 	assert.Equal(t, "587", cfg.SMTP.Port)
-	assert.Equal(t, "http://localhost:8080", cfg.SMTP.BaseURL)
 }
 
 func TestLoadServiceConfig_missingToken(t *testing.T) {

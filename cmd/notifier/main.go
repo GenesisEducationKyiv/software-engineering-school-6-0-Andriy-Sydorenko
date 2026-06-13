@@ -55,7 +55,22 @@ func run() error {
 	go func() {
 		<-ctx.Done()
 		slog.Info("notifier shutting down")
-		grpcServer.GracefulStop()
+
+		// Bound the graceful drain: GracefulStop alone waits indefinitely on
+		// in-flight RPCs (e.g. a hung SMTP send), which would let Docker SIGKILL
+		// mid-drain. Force Stop() past the deadline so shutdown is always bounded.
+		stopped := make(chan struct{})
+		go func() {
+			grpcServer.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(8 * time.Second):
+			slog.Warn("notifier: graceful stop timed out, forcing")
+			grpcServer.Stop()
+		}
+
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := admin.Shutdown(shutdownCtx); err != nil {

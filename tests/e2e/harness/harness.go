@@ -21,12 +21,12 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 	"gorm.io/gorm"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/api"
-	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/db"
-	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/github"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/api"
+	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/db"
+	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/github"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/repository"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/service"
 )
 
 const (

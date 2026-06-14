@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-integration test-e2e build-check generate-mocks verify-mocks install-hooks
+.PHONY: test test-unit test-integration test-e2e build-check generate-mocks generate-proto verify-mocks install-hooks
 
 # Compile every main package without producing artifact files.
 # Vets default + integration + e2e tagged code.
@@ -13,6 +13,16 @@ build-check:
 # line there when introducing a new mocked interface — nothing else to touch.
 generate-mocks:
 	go generate -tags=generate ./...
+
+# Regenerate gRPC stubs from the .proto. Plugins are built from the versions
+# pinned by the go.mod tool directives (no global install), so generated code
+# can't drift. Output lands next to the .proto via paths=source_relative.
+generate-proto:
+	go build -o bin/ google.golang.org/protobuf/cmd/protoc-gen-go google.golang.org/grpc/cmd/protoc-gen-go-grpc
+	PATH="$(CURDIR)/bin:$$PATH" protoc -I . \
+			--go_out=.      --go_opt=module=github.com/Andriy-Sydorenko/repo-release-notifier \
+			--go-grpc_out=. --go-grpc_opt=module=github.com/Andriy-Sydorenko/repo-release-notifier \
+			proto/notifier.proto
 
 # Fail if running `make generate-mocks` would change anything. Used by CI and the
 # pre-commit hook to enforce that committed mocks match the directives (catches

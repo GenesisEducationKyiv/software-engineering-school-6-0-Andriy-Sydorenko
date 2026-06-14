@@ -17,6 +17,8 @@ import (
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"gorm.io/gorm"
 
+	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/db"
+
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/api"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"

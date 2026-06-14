@@ -40,12 +40,12 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 	return nil
 }
 
-func buildMIME(from string, subjectName, to string) []byte {
+func buildMIME(from, recipientEmail, subjectName string) []byte {
 	const boundary = "boundary-repo-release-notifier"
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", from)
-	fmt.Fprintf(&b, "To: %s\r\n", to)
+	fmt.Fprintf(&b, "To: %s\r\n", recipientEmail)
 	fmt.Fprintf(&b, "Subject: %s\r\n", subjectName)
 	for k, v := range msg.Headers {
 		fmt.Fprintf(&b, "%s: %s\r\n", k, v)

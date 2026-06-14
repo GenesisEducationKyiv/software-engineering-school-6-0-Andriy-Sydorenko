@@ -11,10 +11,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/domain"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
 )
 
-func doRequest(t *testing.T, env *testEnv, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
+func doRequest(
+	t *testing.T,
+	env *testEnv,
+	method, path string,
+	body any,
+	headers map[string]string,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	var rdr io.Reader
 	if body != nil {
@@ -68,15 +74,19 @@ func TestSubscribePage(t *testing.T) {
 func TestSubscribeRequiresAPIKey(t *testing.T) {
 	env := newTestEnv(t)
 
-	w := doRequest(t, env, http.MethodPost, "/api/subscribe",
-		domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"}, nil)
+	w := doRequest(
+		t, env, http.MethodPost, "/api/subscribe",
+		domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"}, nil,
+	)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("missing key status=%d", w.Code)
 	}
 
-	w = doRequest(t, env, http.MethodPost, "/api/subscribe",
+	w = doRequest(
+		t, env, http.MethodPost, "/api/subscribe",
 		domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"},
-		map[string]string{"X-API-Key": "wrong"})
+		map[string]string{"X-API-Key": "wrong"},
+	)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("wrong key status=%d", w.Code)
 	}
@@ -85,15 +95,20 @@ func TestSubscribeRequiresAPIKey(t *testing.T) {
 func TestSubscribeHappyPath(t *testing.T) {
 	env := newTestEnv(t)
 
-	w := doRequest(t, env, http.MethodPost, "/api/subscribe",
-		domain.SubscribeRequest{Email: "alice@example.com", Repo: "golang/go"}, authHeaders())
+	w := doRequest(
+		t, env, http.MethodPost, "/api/subscribe",
+		domain.SubscribeRequest{Email: "alice@example.com", Repo: "golang/go"}, authHeaders(),
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 
 	// DB side-effects: one unconfirmed sub + one confirmation token.
 	var subCount int64
-	env.db.Raw(`SELECT COUNT(*) FROM subscriptions WHERE email=? AND confirmed=false`, "alice@example.com").Scan(&subCount)
+	env.db.Raw(
+		`SELECT COUNT(*) FROM subscriptions WHERE email=? AND confirmed=false`,
+		"alice@example.com",
+	).Scan(&subCount)
 	if subCount != 1 {
 		t.Fatalf("expected 1 unconfirmed sub, got %d", subCount)
 	}
@@ -115,8 +130,10 @@ func TestSubscribeHappyPath(t *testing.T) {
 
 func TestSubscribeInvalidRepoFormat(t *testing.T) {
 	env := newTestEnv(t)
-	w := doRequest(t, env, http.MethodPost, "/api/subscribe",
-		domain.SubscribeRequest{Email: "a@b.com", Repo: "no-slash"}, authHeaders())
+	w := doRequest(
+		t, env, http.MethodPost, "/api/subscribe",
+		domain.SubscribeRequest{Email: "a@b.com", Repo: "no-slash"}, authHeaders(),
+	)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -141,7 +158,14 @@ func TestSubscribeDuplicate(t *testing.T) {
 	env := newTestEnv(t)
 	body := domain.SubscribeRequest{Email: "dup@example.com", Repo: "golang/go"}
 
-	if w := doRequest(t, env, http.MethodPost, "/api/subscribe", body, authHeaders()); w.Code != http.StatusOK {
+	if w := doRequest(
+		t,
+		env,
+		http.MethodPost,
+		"/api/subscribe",
+		body,
+		authHeaders(),
+	); w.Code != http.StatusOK {
 		t.Fatalf("first status=%d", w.Code)
 	}
 	w := doRequest(t, env, http.MethodPost, "/api/subscribe", body, authHeaders())
@@ -154,8 +178,10 @@ func TestSubscribeRepoNotFound(t *testing.T) {
 	env := newTestEnv(t)
 	env.github.setErr(domain.ErrRepoNotFound)
 
-	w := doRequest(t, env, http.MethodPost, "/api/subscribe",
-		domain.SubscribeRequest{Email: "a@b.com", Repo: "ghost/ghost"}, authHeaders())
+	w := doRequest(
+		t, env, http.MethodPost, "/api/subscribe",
+		domain.SubscribeRequest{Email: "a@b.com", Repo: "ghost/ghost"}, authHeaders(),
+	)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -170,8 +196,10 @@ func TestSubscribeGitHubRateLimited(t *testing.T) {
 	env := newTestEnv(t)
 	env.github.setErr(domain.ErrRateLimited)
 
-	w := doRequest(t, env, http.MethodPost, "/api/subscribe",
-		domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"}, authHeaders())
+	w := doRequest(
+		t, env, http.MethodPost, "/api/subscribe",
+		domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"}, authHeaders(),
+	)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d", w.Code)
 	}
@@ -190,7 +218,10 @@ func TestConfirmFlow(t *testing.T) {
 
 	// Subscription is now confirmed AND the token row is gone.
 	var confirmed bool
-	env.db.Raw(`SELECT confirmed FROM subscriptions WHERE email=?`, "carol@example.com").Scan(&confirmed)
+	env.db.Raw(
+		`SELECT confirmed FROM subscriptions WHERE email=?`,
+		"carol@example.com",
+	).Scan(&confirmed)
 	if !confirmed {
 		t.Fatal("subscription should be confirmed")
 	}
@@ -252,8 +283,10 @@ func TestGetSubscriptions(t *testing.T) {
 	subscribeOK(t, env, "frank@example.com", "kubernetes/kubernetes")
 	subscribeOK(t, env, "other@example.com", "golang/go")
 
-	w := doRequest(t, env, http.MethodGet,
-		"/api/subscriptions?email=frank@example.com", nil, authHeaders())
+	w := doRequest(
+		t, env, http.MethodGet,
+		"/api/subscriptions?email=frank@example.com", nil, authHeaders(),
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -292,8 +325,10 @@ func TestGetSubscriptionsInvalidEmail(t *testing.T) {
 // failing the test on anything unexpected.
 func subscribeOK(t *testing.T, env *testEnv, email, repo string) {
 	t.Helper()
-	w := doRequest(t, env, http.MethodPost, "/api/subscribe",
-		domain.SubscribeRequest{Email: email, Repo: repo}, authHeaders())
+	w := doRequest(
+		t, env, http.MethodPost, "/api/subscribe",
+		domain.SubscribeRequest{Email: email, Repo: repo}, authHeaders(),
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("subscribeOK email=%s status=%d body=%s", email, w.Code, w.Body.String())
 	}

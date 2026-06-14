@@ -54,12 +54,17 @@ func TestBuildMIMEStructure(t *testing.T) {
 
 func TestBuildMIMEUsesCRLFLineEndings(t *testing.T) {
 	// RFC 5322 wire format is CRLF; bare LF gets rejected/mangled by some receivers.
-	raw := string(buildMIME("from@x", Message{To: "to@x", Subject: "s", PlainBody: "p", HTMLBody: "h"}))
+	raw := string(
+		buildMIME(
+			"from@x",
+			Message{To: "to@x", Subject: "s", PlainBody: "p", HTMLBody: "h"},
+		),
+	)
 	assert.NotContains(t, strings.ReplaceAll(raw, "\r\n", ""), "\n", "found bare LF")
 }
 
 func TestSMTPMailerSendHonoursCancelledContext(t *testing.T) {
-	// Pre-cancelled ctx must not even dial — otherwise a stuck SMTP server holds the goroutine.
+	// Pre-cancelled ctx must not even dial — otherwise a stuck SMTP app holds the goroutine.
 	m := NewSMTPMailer(&Config{Host: "127.0.0.1", Port: "1", Username: "u", Password: "p"})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

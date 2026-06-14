@@ -1,4 +1,4 @@
-# System Design - repo-release-notifier
+# System Design - RelEasely
 
 ## 1. Overview
 

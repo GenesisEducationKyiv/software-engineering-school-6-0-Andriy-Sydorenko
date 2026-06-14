@@ -133,7 +133,7 @@ func (s *SubscribeSuite) TestRendersForm() {
 
 	s.Require().NoError(expect.Page(p).ToHaveTitle(regexp.MustCompile(`(?i)Subscribe to GitHub release notifications`)))
 	s.Require().NoError(expect.Locator(p.GetByRole("heading", playwright.PageGetByRoleOptions{
-		Name: regexp.MustCompile(`(?i)Subscribe to GitHub release notifications`),
+		Name: regexp.MustCompile(`(?i)RelEasely`),
 	})).ToBeVisible())
 	s.Require().NoError(expect.Locator(emailField(p)).ToBeVisible())
 	s.Require().NoError(expect.Locator(repoField(p)).ToBeVisible())

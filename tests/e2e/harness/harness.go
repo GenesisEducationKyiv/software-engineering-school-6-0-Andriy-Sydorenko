@@ -139,7 +139,7 @@ func New(t *testing.T, opts ...Options) *Harness {
 		// log.Printf, not t.Logf: this goroutine can outlive the test (nothing
 		// joins it on shutdown), and t.Logf after the test finishes panics.
 		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("harness http server: %v", err)
+			log.Printf("harness http app: %v", err)
 		}
 	}()
 

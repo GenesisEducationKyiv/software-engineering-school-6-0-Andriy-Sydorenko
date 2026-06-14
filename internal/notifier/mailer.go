@@ -7,14 +7,6 @@ import (
 	"strings"
 )
 
-type Message struct {
-	To        string
-	Subject   string
-	PlainBody string
-	HTMLBody  string
-	Headers   map[string]string
-}
-
 type Mailer interface {
 	Send(ctx context.Context, msg Message) error
 }
@@ -48,14 +40,13 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 	return nil
 }
 
-// buildMIME assembles a multipart/alternative message.
-func buildMIME(from string, msg Message) []byte {
+func buildMIME(from string, subjectName, to string) []byte {
 	const boundary = "boundary-repo-release-notifier"
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", from)
-	fmt.Fprintf(&b, "To: %s\r\n", msg.To)
-	fmt.Fprintf(&b, "Subject: %s\r\n", msg.Subject)
+	fmt.Fprintf(&b, "To: %s\r\n", to)
+	fmt.Fprintf(&b, "Subject: %s\r\n", subjectName)
 	for k, v := range msg.Headers {
 		fmt.Fprintf(&b, "%s: %s\r\n", k, v)
 	}
@@ -74,4 +65,36 @@ func buildMIME(from string, msg Message) []byte {
 
 	fmt.Fprintf(&b, "--%s--\r\n", boundary)
 	return []byte(b.String())
+}
+
+type Notifier struct {
+	mailer Mailer
+}
+
+func New(cfg *Config) *Notifier {
+	return &Notifier{
+		mailer: NewSMTPMailer(cfg),
+	}
+}
+
+func (n *Notifier) SendConfirmation(
+	ctx context.Context,
+	email, repo, token, unsubscribeToken string,
+) error {
+	msg, err := n.composer.Confirmation(email, repo, token, unsubscribeToken)
+	if err != nil {
+		return err
+	}
+	return n.mailer.Send(ctx, msg)
+}
+
+func (n *Notifier) SendReleaseNotification(
+	ctx context.Context,
+	email, repo, tag, unsubscribeToken string,
+) error {
+	msg, err := n.composer.Release(email, repo, tag, unsubscribeToken)
+	if err != nil {
+		return err
+	}
+	return n.mailer.Send(ctx, msg)
 }

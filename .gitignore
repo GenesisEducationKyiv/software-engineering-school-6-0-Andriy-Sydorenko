@@ -30,6 +30,7 @@ go.work.sum
 
 # env file
 .env
+.env.notifier
 
 # Editor/IDE
 .idea/

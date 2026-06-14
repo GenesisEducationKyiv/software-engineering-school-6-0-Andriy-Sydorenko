@@ -74,7 +74,7 @@ func (f *GitHubFixture) handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, `{"message":"API rate limit exceeded"}`, http.StatusTooManyRequests)
 	case GHServerError:
-		http.Error(w, `{"message":"server error"}`, http.StatusInternalServerError)
+		http.Error(w, `{"message":"app error"}`, http.StatusInternalServerError)
 	default: // GHOK
 		w.Header().Set("Content-Type", "application/json")
 		if len(parts) == 5 && parts[3] == "releases" && parts[4] == "latest" {

@@ -19,6 +19,7 @@ func invokeWriteError(t *testing.T, err error) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	writeError(c, "op", err)
 	return w
 }

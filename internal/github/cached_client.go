@@ -3,7 +3,7 @@ package github
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/cache"
@@ -45,7 +45,7 @@ func (c *CachedClient) ValidateRepo(ctx context.Context, owner, repo string) err
 			return domain.ErrRepoNotFound
 		}
 	} else if !errors.Is(err, cache.ErrMiss) {
-		log.Printf("cache: get %s failed: %v", key, err)
+		slog.WarnContext(ctx, "cache: get failed", "key", key, "err", err)
 	}
 
 	err := c.inner.ValidateRepo(ctx, owner, repo)
@@ -67,7 +67,7 @@ func (c *CachedClient) GetLatestRelease(ctx context.Context, owner, repo string)
 		}
 		return v, nil
 	} else if !errors.Is(err, cache.ErrMiss) {
-		log.Printf("cache: get %s failed: %v", key, err)
+		slog.WarnContext(ctx, "cache: get failed", "key", key, "err", err)
 	}
 
 	tag, err := c.inner.GetLatestRelease(ctx, owner, repo)
@@ -84,6 +84,6 @@ func (c *CachedClient) GetLatestRelease(ctx context.Context, owner, repo string)
 
 func (c *CachedClient) set(ctx context.Context, key, value string) {
 	if err := c.store.SetEx(ctx, key, value, cacheTTL); err != nil {
-		log.Printf("cache: set %s failed: %v", key, err)
+		slog.WarnContext(ctx, "cache: set failed", "key", key, "err", err)
 	}
 }

@@ -353,18 +353,51 @@ See `docs/testing/` for per-suite detail.
 
 ---
 
+## Observability: logs + metrics
+
+The app emits structured `slog` JSON to stdout (`LOG_FORMAT=json`). A **Filebeat**
+sidecar tails the app's Docker logs, parses the JSON, and ships it to
+**Elasticsearch**; **Kibana** searches and aggregates. The app stays decoupled — no
+ES client. **Prometheus** scrapes `/metrics` and **Grafana** serves a provisioned RED
+dashboard. See ADR-009/010/011 for the decisions (including the reverted push driver).
+
+The whole stack lives in an overlay compose file; one command brings it up:
+
+```
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build -d
+```
+
+`... down` tears it down (`-v` also drops every data volume, Postgres included).
+
+- App <http://localhost:8080> · Elasticsearch <http://localhost:9200> ·
+  Kibana <http://localhost:5601> · Grafana <http://localhost:3000>
+
+Local/dev posture only: ES security and TLS are disabled — do not expose.
+
+### See the logs in Kibana
+
+Generate activity (subscribe, or wait for a scanner tick), then create the data view
+once — Kibana needs it before Discover shows anything:
+
+```
+curl -X POST localhost:5601/api/data_views/data_view \
+  -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+  -d '{"data_view":{"title":"repo-release-notifier-*","timeFieldName":"@timestamp"}}'
+```
+
+(Or Kibana → **Stack Management → Data Views → Create**, pattern
+`repo-release-notifier-*`, time field `@timestamp`.) Open **Discover** — every line is
+structured slog JSON: `level`, `msg`, `container.name`, plus attrs like `route`,
+`status`, `duration_ms` (HTTP access logs) or `repo`, `err` (app events).
+
+---
+
 ## What's intentionally not here
 
-A handful of bonus items from the spec I didn't implement:
+Bonus items from the spec I didn't implement:
 
-- **Prometheus `/metrics`.** Trivial to add (`promhttp.Handler`
-  behind a middleware) but without a scraping target there's
-  nowhere for the data to go. Env vars are reserved.
 - **Deployment.** No hosting wired up. `docker-compose.yml` gets
   you the full stack locally.
-- **Structured logging (`slog`).** The service uses `log.Printf`.
-  Worth migrating if this ever went into an environment with a
-  log aggregator; for now it's noise for no gain.
 
 Schema changes go through versioned, forward-only SQL migrations
 under `internal/db/migrations/` (golang-migrate), applied on

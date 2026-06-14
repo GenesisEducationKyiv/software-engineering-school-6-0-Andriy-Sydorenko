@@ -69,6 +69,16 @@ linters:
         - (io.Closer).Close
         - (*net/http.Response).Body.Close
 
+  exclusions:
+    rules:
+      # slog.Handler.Handle (and test helpers mirroring it) take slog.Record by
+      # value per the stdlib interface contract; gocritic hugeParam is a false
+      # positive there.
+      - path: internal/observability/logging/text_handler
+        linters:
+          - gocritic
+        text: hugeParam
+
 formatters:
   enable:
     - gofmt

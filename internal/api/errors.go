@@ -2,7 +2,7 @@ package api
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -34,6 +34,6 @@ func writeError(c *gin.Context, op string, err error) {
 			return
 		}
 	}
-	log.Printf("%s error: %v", op, err)
+	slog.ErrorContext(c.Request.Context(), "unmapped error", "op", op, "err", err)
 	c.JSON(http.StatusInternalServerError, domain.ErrorResponse{Error: "internal server error"})
 }

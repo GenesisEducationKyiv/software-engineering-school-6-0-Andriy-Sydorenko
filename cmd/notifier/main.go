@@ -105,7 +105,16 @@ func run() error {
 
 	go func() {
 		<-ctx.Done()
-		server.GracefulStop()
+		stopped := make(chan struct{})
+		go func() {
+			server.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(8 * time.Second):
+			server.Stop() // force-close if a hung in-flight RPC won't drain
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = adminSrv.Shutdown(shutdownCtx)

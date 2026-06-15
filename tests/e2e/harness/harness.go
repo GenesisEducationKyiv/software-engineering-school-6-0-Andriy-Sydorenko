@@ -19,14 +19,17 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"google.golang.org/grpc"
 	"gorm.io/gorm"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/api"
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/db"
 	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/github"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/notifierclient"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notifierpb"
 )
 
 const (
@@ -50,10 +53,12 @@ type Harness struct {
 	DB             *gorm.DB
 	GitHub         *GitHubFixture // nil when Options.GHValidator overrides it
 
-	pgC      testcontainers.Container
-	mailC    testcontainers.Container
-	browserC testcontainers.Container
-	srv      *http.Server
+	pgC          testcontainers.Container
+	mailC        testcontainers.Container
+	browserC     testcontainers.Container
+	srv          *http.Server
+	grpcSrv      *grpc.Server
+	notifierConn *notifierclient.Client
 }
 
 // Options configures optional substitutions. Zero value = sensible defaults
@@ -108,23 +113,34 @@ func New(t *testing.T, opts ...Options) *Harness {
 	if gh == nil {
 		ghFix = newGitHubFixture()
 		gh = githubclient.NewClient(
-			&githubclient.Config{
-				Timeout: 10 * time.Second,
-				BaseURL: ghFix.URL(),
-			},
+			&githubclient.Config{RequestTimeout: 10 * time.Second},
+			githubclient.WithBaseURL(ghFix.URL()),
 		)
 	}
 
 	repo := repository.New(db)
-	note := notifier.New(
-		&notifier.Config{
-			Host:     smtpAddr.host,
-			Port:     smtpAddr.port,
-			Username: "harness@example.com",
-			Password: "harness",
-			BaseURL:  baseURL,
-		},
-	)
+
+	// Real notifier gRPC service, in-process, sending through Mailpit — so e2e
+	// exercises the actual app → gRPC → SMTP path, not a shortcut.
+	mailer := notifier.NewSMTPMailer(&notifier.Config{
+		Host:     smtpAddr.host,
+		Port:     smtpAddr.port,
+		Username: "harness@example.com",
+		Password: "harness",
+	})
+	grpcLis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	grpcSrv := grpc.NewServer()
+	notifierpb.RegisterNotifierServiceServer(grpcSrv, notifier.NewGRPCServer(mailer))
+	go func() {
+		if err := grpcSrv.Serve(grpcLis); err != nil {
+			log.Printf("harness notifier grpc: %v", err)
+		}
+	}()
+	notifierConn, err := notifierclient.Dial(grpcLis.Addr().String())
+	require.NoError(t, err)
+
+	note := service.NewEmailNotifier(baseURL, notifierConn)
 	svc := service.New(repo, gh, note, service.RandomToken)
 	router := api.NewRouter(api.NewHandler(svc), o.APIKey)
 
@@ -155,6 +171,8 @@ func New(t *testing.T, opts ...Options) *Harness {
 		mailC:          mailC,
 		browserC:       browserC,
 		srv:            srv,
+		grpcSrv:        grpcSrv,
+		notifierConn:   notifierConn,
 	}
 	waitForHealth(t, h.BaseURL)
 	t.Cleanup(h.shutdown)
@@ -182,6 +200,8 @@ func (h *Harness) shutdown() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = h.srv.Shutdown(shutdownCtx)
+	_ = h.notifierConn.Close()
+	h.grpcSrv.GracefulStop()
 	if h.GitHub != nil {
 		h.GitHub.close()
 	}

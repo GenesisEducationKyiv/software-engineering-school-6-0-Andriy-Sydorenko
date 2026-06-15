@@ -9,7 +9,7 @@ import (
 
 func NewRouter(h *Handler, apiKey string) *gin.Engine {
 	router := gin.New()
-	router.Use(MetricsMiddleware(), gin.Recovery())
+	router.Use(RequestID(), MetricsMiddleware(), gin.Recovery())
 	registerRoutes(router, h, apiKey)
 	return router
 }

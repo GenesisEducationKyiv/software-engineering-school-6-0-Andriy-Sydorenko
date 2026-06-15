@@ -19,12 +19,22 @@ type Client struct {
 	baseURL    string
 }
 
-func NewClient(cfg *Config) *Client {
-	return &Client{
+type Option func(*Client)
+
+func WithBaseURL(url string) Option {
+	return func(c *Client) { c.baseURL = url }
+}
+
+func NewClient(cfg *Config, opts ...Option) *Client {
+	c := &Client{
 		httpClient: &http.Client{Timeout: cfg.RequestTimeout},
 		token:      cfg.Token,
 		baseURL:    defaultBaseURL,
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 func (g *Client) ValidateRepo(ctx context.Context, owner, repo string) error {

@@ -13,7 +13,7 @@ type Validator interface {
 }
 
 func ValidateAll(vs ...Validator) error {
-	var errs []error
+	errs := make([]error, 0, len(vs))
 	for _, v := range vs {
 		errs = append(errs, v.Validate())
 	}

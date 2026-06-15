@@ -17,5 +17,5 @@ func NewLogger(cfg *Config, w io.Writer) *slog.Logger {
 	default:
 		h = slog.NewJSONHandler(w, opts)
 	}
-	return slog.New(h)
+	return slog.New(contextHandler{h})
 }

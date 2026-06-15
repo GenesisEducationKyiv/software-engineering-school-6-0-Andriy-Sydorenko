@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,11 +13,10 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/api"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/cache"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/notifierclient"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/scanner"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
@@ -42,6 +40,7 @@ type Config struct {
 	WriteTimeout time.Duration
 	APIKey       string
 	NotifierAddr string // NOTIFIER_GRPC_ADDR, e.g. "notifier:9090"
+	BaseURL      string // BASE_URL for confirmation/unsubscribe links in emails
 }
 
 func (c *Config) validate() error {
@@ -79,6 +78,8 @@ func loadCfg() (*Config, error) {
 		ReadTimeout:  config.GetEnvDuration("READ_TIMEOUT", 10*time.Second),
 		WriteTimeout: config.GetEnvDuration("WRITE_TIMEOUT", 10*time.Second),
 		APIKey:       config.GetEnvOrDefault("API_KEY", ""),
+		NotifierAddr: config.GetEnvOrDefault("NOTIFIER_GRPC_ADDR", "localhost:9090"),
+		BaseURL:      config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -106,20 +107,16 @@ func run() error {
 
 	repo := repository.New(db)
 	gh, fetcher := buildGitHubClients(cfg)
-	svc := service.New(repo, gh, service.RandomToken)
-	scan := scanner.New(repo, fetcher, cfg.Scanner)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, err := grpc.NewClient(
-		cfg.NotifierAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	notifierConn, err := notifierclient.Dial(cfg.NotifierAddr)
 	if err != nil {
-		log.Fatalf("Did not connect: %v", err)
+		return fmt.Errorf("dial notifier: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = notifierConn.Close() }()
+
+	note := service.NewEmailNotifier(cfg.BaseURL, notifierConn)
+	svc := service.New(repo, gh, note, service.RandomToken)
+	scan := scanner.New(repo, fetcher, note, cfg.Scanner)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

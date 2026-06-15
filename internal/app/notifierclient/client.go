@@ -16,12 +16,15 @@ type Client struct {
 	rpc  notifierpb.NotifierServiceClient
 }
 
-func Dial(addr string) (*Client, error) {
-	conn, err := grpc.NewClient(
-		addr,
+func Dial(addr, token string) (*Client, error) {
+	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(grpcmw.RequestIDClientInterceptor()),
-	)
+		grpc.WithChainUnaryInterceptor(grpcmw.RequestIDClientInterceptor()),
+	}
+	if token != "" {
+		opts = append(opts, grpc.WithChainUnaryInterceptor(grpcmw.AuthClientInterceptor(token)))
+	}
+	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dial notifier %q: %w", addr, err)
 	}

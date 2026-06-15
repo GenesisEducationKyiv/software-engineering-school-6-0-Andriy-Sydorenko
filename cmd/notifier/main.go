@@ -27,10 +27,11 @@ import (
 const envFile = ".env.notifier"
 
 type Config struct {
-	SMTP      *notifier.Config
-	Log       *logging.Config
-	Port      string
-	AdminAddr string
+	SMTP          *notifier.Config
+	Log           *logging.Config
+	Port          string
+	AdminAddr     string
+	InternalToken string // INTERNAL_API_TOKEN; empty disables gRPC auth
 }
 
 func (c *Config) validate() error {
@@ -52,10 +53,11 @@ func loadCfg() (*Config, error) {
 	}
 
 	cfg := &Config{
-		SMTP:      smtpCfg,
-		Log:       logCfg,
-		Port:      config.GetEnvOrDefault("PORT", "9090"),
-		AdminAddr: config.GetEnvOrDefault("ADMIN_ADDR", ":9091"),
+		SMTP:          smtpCfg,
+		Log:           logCfg,
+		Port:          config.GetEnvOrDefault("PORT", "9090"),
+		AdminAddr:     config.GetEnvOrDefault("ADMIN_ADDR", ":9091"),
+		InternalToken: config.GetEnvOrDefault("INTERNAL_API_TOKEN", ""),
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -94,13 +96,15 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	server := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(
-			grpcmw.RecoveryServerInterceptor(),
-			grpcmw.RequestIDServerInterceptor(),
-			notifier.MetricsInterceptor(),
-		),
-	)
+	interceptors := []grpc.UnaryServerInterceptor{
+		grpcmw.RecoveryServerInterceptor(),
+		grpcmw.RequestIDServerInterceptor(),
+		notifier.MetricsInterceptor(),
+	}
+	if cfg.InternalToken != "" {
+		interceptors = append(interceptors, grpcmw.AuthServerInterceptor(cfg.InternalToken))
+	}
+	server := grpc.NewServer(grpc.ChainUnaryInterceptor(interceptors...))
 	notifierpb.RegisterNotifierServiceServer(server, notifier.NewGRPCServer(mailer))
 
 	go func() {

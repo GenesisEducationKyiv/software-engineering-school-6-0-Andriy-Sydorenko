@@ -30,6 +30,7 @@ import (
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notifierpb"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/grpcmw"
 )
 
 const (
@@ -40,6 +41,10 @@ const (
 	pgImage           = "postgres:16-alpine"
 	mailpitImage      = "axllent/mailpit:v1.20"
 	containerStartTTL = 90 * time.Second
+
+	// harnessInternalToken exercises the authenticated app → notifier gRPC path
+	// end-to-end (shared by the in-process server interceptor and the dial).
+	harnessInternalToken = "e2e-internal-token"
 )
 
 // Harness holds the live app + its dependencies and exposes the URLs tests
@@ -130,14 +135,14 @@ func New(t *testing.T, opts ...Options) *Harness {
 	})
 	grpcLis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	grpcSrv := grpc.NewServer()
+	grpcSrv := grpc.NewServer(grpc.ChainUnaryInterceptor(grpcmw.AuthServerInterceptor(harnessInternalToken)))
 	notifierpb.RegisterNotifierServiceServer(grpcSrv, notifier.NewGRPCServer(mailer))
 	go func() {
 		if err := grpcSrv.Serve(grpcLis); err != nil {
 			log.Printf("harness notifier grpc: %v", err)
 		}
 	}()
-	notifierConn, err := notifierclient.Dial(grpcLis.Addr().String())
+	notifierConn, err := notifierclient.Dial(grpcLis.Addr().String(), harnessInternalToken)
 	require.NoError(t, err)
 
 	note := service.NewEmailNotifier(baseURL, notifierConn)

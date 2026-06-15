@@ -96,6 +96,7 @@ func run() error {
 	}
 	server := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
+			grpcmw.RecoveryServerInterceptor(),
 			grpcmw.RequestIDServerInterceptor(),
 			notifier.MetricsInterceptor(),
 		),

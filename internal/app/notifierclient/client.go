@@ -17,12 +17,13 @@ type Client struct {
 }
 
 func Dial(addr, token string) (*Client, error) {
+	interceptors := []grpc.UnaryClientInterceptor{grpcmw.RequestIDClientInterceptor()}
+	if token != "" {
+		interceptors = append(interceptors, grpcmw.AuthClientInterceptor(token))
+	}
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithChainUnaryInterceptor(grpcmw.RequestIDClientInterceptor()),
-	}
-	if token != "" {
-		opts = append(opts, grpc.WithChainUnaryInterceptor(grpcmw.AuthClientInterceptor(token)))
+		grpc.WithChainUnaryInterceptor(interceptors...),
 	}
 	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {

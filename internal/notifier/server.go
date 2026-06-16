@@ -32,9 +32,11 @@ func (s *GRPCServer) SendEmail(
 		req.GetSubject(),
 		req.GetHtmlBody(),
 	); err != nil {
-		slog.ErrorContext(ctx, "send email failed",
-			"recipient", maskEmail(req.GetRecipientEmail()), "err", err)
-		return nil, status.Errorf(codes.Internal, "send email: %v", err)
+		slog.ErrorContext(
+			ctx, "send email failed",
+			"recipient", maskEmail(req.GetRecipientEmail()), "err", err,
+		)
+		return nil, status.Error(codes.Internal, "failed to send email")
 	}
 	slog.InfoContext(ctx, "email sent", "recipient", maskEmail(req.GetRecipientEmail()))
 	return &notifierpb.SendEmailResponse{}, nil

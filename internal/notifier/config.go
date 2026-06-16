@@ -16,7 +16,7 @@ type Config struct {
 func (c *Config) Validate() error {
 	// values are usually passed to config with default values, this is just-in-case validation logic
 	if c.Host == "" || c.Port == "" || c.Username == "" || c.Password == "" {
-		return fmt.Errorf("SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD are required")
+		return fmt.Errorf("SMTP_HOST, SMTP_PORT, SMTP_USERNAME, and SMTP_PASSWORD are required")
 	}
 	return nil
 }

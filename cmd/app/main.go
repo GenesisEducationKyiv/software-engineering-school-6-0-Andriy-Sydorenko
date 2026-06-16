@@ -108,7 +108,7 @@ func run() error {
 	}
 
 	repo := repository.New(db)
-	gh, fetcher := buildGitHubClients(cfg)
+	gh := buildGitHubClient(cfg)
 
 	notifierConn, err := notifierclient.Dial(cfg.NotifierAddr, cfg.NotifierToken)
 	if err != nil {
@@ -118,7 +118,7 @@ func run() error {
 
 	note := service.NewEmailNotifier(cfg.BaseURL, notifierConn)
 	svc := service.New(repo, repo, gh, note, service.RandomToken)
-	scan := scanner.New(repo, fetcher, note, cfg.Scanner)
+	scan := scanner.New(repo, gh, note, cfg.Scanner)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -158,22 +158,26 @@ func main() {
 	}
 }
 
-// buildGitHubClients returns validator and fetcher views of the
-// GitHub client, optionally wrapped in the Redis cache decorator.
-// Cache failure is non-fatal.
-// TODO: move and rewrite github client init
-func buildGitHubClients(cfg *Config) (service.RepoValidator, scanner.ReleaseFetcher) {
+// githubClient is the GitHub capability surface main wires into both the
+// service (repo validation) and the scanner (release fetching).
+type githubClient interface {
+	service.RepoValidator
+	scanner.ReleaseFetcher
+}
+
+// buildGitHubClient returns the GitHub client, wrapped in the Redis cache
+// decorator when Redis is configured and reachable. Cache failure is non-fatal:
+// the app falls back to the uncached client.
+func buildGitHubClient(cfg *Config) githubClient {
+	base := githubclient.NewClient(cfg.GitHub)
 	if cfg.Redis.DSN() == "" {
-		c := githubclient.NewClient(cfg.GitHub)
-		return c, c
+		return base
 	}
 	rdb, err := cache.NewRedis(cfg.Redis)
 	if err != nil {
 		slog.Warn("redis unavailable, continuing without cache", "err", err)
-		c := githubclient.NewClient(cfg.GitHub)
-		return c, c
+		return base
 	}
-	cached := githubclient.NewCachedClient(githubclient.NewClient(cfg.GitHub), rdb)
 	slog.Info("github client: redis cache enabled")
-	return cached, cached
+	return githubclient.NewCachedClient(base, rdb)
 }

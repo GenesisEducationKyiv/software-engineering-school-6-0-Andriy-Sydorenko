@@ -180,13 +180,17 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 
 	for i := range subs {
 		sub := &subs[i]
-		if err := s.notifier.SendReleaseNotification(
-			ctx,
+		// Per-call deadline so a stalled notifier RPC can't pin a worker slot.
+		sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := s.notifier.SendReleaseNotification(
+			sendCtx,
 			sub.Email,
 			sub.Repo,
 			tag,
 			sub.UnsubscribeToken,
-		); err != nil {
+		)
+		cancel()
+		if err != nil {
 			// sub.ID is logged in place of sub.Email — email is PII
 			slog.ErrorContext(
 				ctx, "scanner: failed to send release notification",

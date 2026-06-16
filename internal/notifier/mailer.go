@@ -34,10 +34,21 @@ func (m *SMTPMailer) Send(ctx context.Context, to, subject, htmlBody string) err
 	body := buildMIME(m.username, to, subject, htmlBody)
 	addr := fmt.Sprintf("%s:%s", m.host, m.port)
 	auth := smtp.PlainAuth("", m.username, m.password, m.host)
-	if err := smtp.SendMail(addr, auth, m.username, []string{to}, body); err != nil {
-		return fmt.Errorf("failed to send email to %s: %w", to, err)
+
+	// net/smtp can't be cancelled, so run it off-thread and let the caller
+	// return on ctx expiry. The orphaned goroutine drains on the TCP timeout —
+	// this frees the handler, it doesn't abort the in-flight send.
+	done := make(chan error, 1)
+	go func() { done <- smtp.SendMail(addr, auth, m.username, []string{to}, body) }()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("failed to send email to %s: %w", maskEmail(to), err)
+		}
+		return nil
 	}
-	return nil
 }
 
 func buildMIME(from, to, subject, htmlBody string) []byte {
@@ -50,4 +61,13 @@ func buildMIME(from, to, subject, htmlBody string) []byte {
 	fmt.Fprint(&b, "Content-Transfer-Encoding: 8bit\r\n\r\n")
 	fmt.Fprintf(&b, "%s\r\n", htmlBody)
 	return []byte(b.String())
+}
+
+// maskEmail keeps logs PII-safe: "alice@example.com" -> "a***@example.com".
+func maskEmail(email string) string {
+	at := strings.IndexByte(email, '@')
+	if at <= 0 {
+		return "***"
+	}
+	return email[:1] + "***" + email[at:]
 }

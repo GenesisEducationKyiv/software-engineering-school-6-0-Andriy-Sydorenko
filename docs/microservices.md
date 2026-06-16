@@ -77,8 +77,9 @@ truth for the boundary — no hand-maintained DTOs cross the process line.
 ## Resilience & internal auth (the gRPC hop)
 
 Chained server interceptors, outermost first: **Recovery** (panic → `codes.Internal`),
+**Auth** (rejected ahead of metrics, so unauthenticated calls don't skew latency),
 **RequestID** (`x-request-id` propagated/minted — correlates app + notifier logs),
-**Metrics** (ADR-011), **Auth**. Shutdown is bounded (`GracefulStop` + 8 s force-stop).
+**Metrics** (ADR-011). Shutdown is bounded (`GracefulStop` + 8 s force-stop).
 
 **Auth** — a shared bearer secret (`INTERNAL_API_TOKEN`) in request metadata, verified
 with a constant-time compare; a client interceptor attaches it to every call. AuthZ
@@ -93,8 +94,9 @@ next repo. Delivery is **at-most-once** — no outbox yet (ADR-006).
 One multi-stage Dockerfile builds both binaries; `docker-compose.yml` runs them as
 `app` + `notifier`. The notifier publishes no host port — gRPC (`:9090`) and admin HTTP
 (`:9091`) stay on the compose network; the core dials `notifier:9090`. `app` waits on
-db + redis (`depends_on: service_healthy`) and dials the notifier lazily over gRPC —
-there is no notifier healthcheck. The app serves `/health` + `/metrics` on `:8080`; the
+db + redis (`depends_on: service_healthy`) and on the notifier having started
+(`service_started` — start-ordering only); it still dials the notifier lazily over gRPC,
+so there is no notifier healthcheck. The app serves `/health` + `/metrics` on `:8080`; the
 notifier serves `/metrics` on its admin port `:9091`. Prometheus scrapes both
 (`app:8080`, `notifier:9091`); Filebeat ships both containers' logs to Elasticsearch.
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -42,7 +43,7 @@ func APIKeyAuth(apiKey string) gin.HandlerFunc {
 			)
 			return
 		}
-		if key != apiKey {
+		if subtle.ConstantTimeCompare([]byte(key), []byte(apiKey)) != 1 {
 			c.AbortWithStatusJSON(
 				http.StatusForbidden,
 				domain.ErrorResponse{Error: "invalid API key"},

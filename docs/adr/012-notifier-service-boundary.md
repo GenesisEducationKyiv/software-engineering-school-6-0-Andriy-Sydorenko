@@ -32,11 +32,11 @@ Modularize into `internal/app`, `internal/notifier`, `internal/shared`; ship two
 **Hardened hop** — chained unary interceptors (`internal/shared/observability/grpcmw`), outermost first:
 
 1. **Recovery** — handler panic → `codes.Internal`; the connection survives.
-2. **RequestID** — propagates `x-request-id`, minting one server-side when absent, so app and notifier logs correlate without a tracing system.
-3. **Metrics** — RED histograms (ADR-011).
-4. **Auth** — constant-time bearer token (`INTERNAL_API_TOKEN`, `crypto/subtle`); mounted only when the token is non-empty (empty = bypass for local/dev/e2e, matching the API-key convention). Env-injected, never logged.
+2. **Auth** — constant-time bearer token (`INTERNAL_API_TOKEN`, `crypto/subtle`); mounted only when the token is non-empty (empty = bypass for local/dev/e2e, matching the API-key convention). Env-injected, never logged. Placed ahead of metrics so unauthenticated calls are rejected without polluting the latency histogram.
+3. **RequestID** — propagates `x-request-id`, minting one server-side when absent, so app and notifier logs correlate without a tracing system.
+4. **Metrics** — RED histograms (ADR-011).
 
-Shutdown is bounded: `GracefulStop` with an 8 s `Stop()` fallback so a hung RPC can't block exit.
+Shutdown is bounded: `GracefulStop` with an 8 s `Stop()` fallback so a hung RPC can't block exit. `net/smtp` itself can't be cancelled, so the mailer runs the blocking send in a goroutine and returns on context expiry — per-call deadlines and the shutdown budget free the handler, while the orphaned send drains on its own TCP timeout. Delivery is at-most-once regardless (ADR-006).
 
 ---
 

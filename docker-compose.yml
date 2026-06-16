@@ -35,6 +35,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      notifier:
+        condition: service_started
     environment:
       DB_HOST: db
       DB_PORT: 5432

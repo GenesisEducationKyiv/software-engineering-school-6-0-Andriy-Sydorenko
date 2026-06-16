@@ -34,6 +34,9 @@ linters:
     # Performance
     - prealloc
 
+    # Imports / module boundaries
+    - depguard
+
   settings:
     cyclop:
       max-complexity: 15
@@ -68,6 +71,15 @@ linters:
       exclude-functions:
         - (io.Closer).Close
         - (*net/http.Response).Body.Close
+    depguard:
+      rules:
+        app-not-notifier-core:
+          files:
+            - "**/internal/app/**"
+            - "**/cmd/app/**"
+          deny:
+            - pkg: github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier
+              desc: "the app must use internal/app/notifierclient (gRPC), not import the notifier service-core"
 
   exclusions:
     rules:

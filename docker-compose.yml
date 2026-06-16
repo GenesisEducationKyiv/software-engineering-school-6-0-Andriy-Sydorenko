@@ -50,6 +50,8 @@ services:
       SCAN_INTERVAL: ${SCAN_INTERVAL:-5m}
       API_KEY: ${API_KEY:-}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
     ports:
       - "${PORT:-8080}:8080"
 

@@ -112,7 +112,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	gh := &stubGitHub{}
 	mailer := &stubMailer{}
 	repo := repository.New(db)
-	svc := service.New(repo, gh, mailer, service.RandomToken)
+	svc := service.New(repo, repo, gh, mailer, service.RandomToken)
 	router := api.NewRouter(api.NewHandler(svc), testAPIKey)
 
 	return &testEnv{

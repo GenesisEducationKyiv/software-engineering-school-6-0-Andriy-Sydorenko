@@ -25,7 +25,8 @@ func fixedTokens() TokenGenerator {
 }
 
 type fixture struct {
-	repo     *mocks.MockSubscriptionRepository
+	repo     *mocks.MockSubscriptionRepo
+	tokens   *mocks.MockTokenRepo
 	github   *mocks.MockRepoValidator
 	notifier *mocks.MockConfirmationSender
 	svc      *Service
@@ -35,11 +36,12 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	f := &fixture{
-		repo:     mocks.NewMockSubscriptionRepository(ctrl),
+		repo:     mocks.NewMockSubscriptionRepo(ctrl),
+		tokens:   mocks.NewMockTokenRepo(ctrl),
 		github:   mocks.NewMockRepoValidator(ctrl),
 		notifier: mocks.NewMockConfirmationSender(ctrl),
 	}
-	f.svc = New(f.repo, f.github, f.notifier, fixedTokens())
+	f.svc = New(f.repo, f.tokens, f.github, f.notifier, fixedTokens())
 	return f
 }
 
@@ -202,7 +204,8 @@ func TestSubscribe_PersistErrorPropagatesAndSkipsEmail(t *testing.T) {
 func TestSubscribe_TokenGenerationErrorAborts(t *testing.T) {
 	boom := errors.New("rng exhausted")
 	ctrl := gomock.NewController(t)
-	repo := mocks.NewMockSubscriptionRepository(ctrl)
+	repo := mocks.NewMockSubscriptionRepo(ctrl)
+	tokens := mocks.NewMockTokenRepo(ctrl)
 	github := mocks.NewMockRepoValidator(ctrl)
 	notifier := mocks.NewMockConfirmationSender(ctrl)
 
@@ -214,7 +217,7 @@ func TestSubscribe_TokenGenerationErrorAborts(t *testing.T) {
 	github.EXPECT().ValidateRepo(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 
 	failingGen := func() (string, error) { return "", boom }
-	svc := New(repo, github, notifier, failingGen)
+	svc := New(repo, tokens, github, notifier, failingGen)
 
 	err := svc.Subscribe(
 		context.Background(),
@@ -227,10 +230,10 @@ func TestConfirmSubscription(t *testing.T) {
 	t.Run(
 		"valid token confirms and deletes token", func(t *testing.T) {
 			f := newFixture(t)
-			f.repo.EXPECT().FindTokenByValue(gomock.Any(), "abc123").
+			f.tokens.EXPECT().FindTokenByValue(gomock.Any(), "abc123").
 				Return(&domain.ConfirmationToken{ID: 7, SubscriptionID: 42}, nil)
 			f.repo.EXPECT().ConfirmSubscription(gomock.Any(), uint(42)).Return(nil)
-			f.repo.EXPECT().DeleteToken(gomock.Any(), uint(7)).Return(nil)
+			f.tokens.EXPECT().DeleteToken(gomock.Any(), uint(7)).Return(nil)
 
 			require.NoError(t, f.svc.ConfirmSubscription(context.Background(), "abc123"))
 		},
@@ -247,7 +250,7 @@ func TestConfirmSubscription(t *testing.T) {
 	t.Run(
 		"unknown token rejected", func(t *testing.T) {
 			f := newFixture(t)
-			f.repo.EXPECT().FindTokenByValue(gomock.Any(), "missing").Return(nil, nil)
+			f.tokens.EXPECT().FindTokenByValue(gomock.Any(), "missing").Return(nil, nil)
 
 			err := f.svc.ConfirmSubscription(context.Background(), "missing")
 			require.ErrorIs(t, err, domain.ErrTokenNotFound)
@@ -257,7 +260,7 @@ func TestConfirmSubscription(t *testing.T) {
 	t.Run(
 		"lookup error propagates", func(t *testing.T) {
 			f := newFixture(t)
-			f.repo.EXPECT().FindTokenByValue(gomock.Any(), gomock.Any()).Return(
+			f.tokens.EXPECT().FindTokenByValue(gomock.Any(), gomock.Any()).Return(
 				nil,
 				errors.New("db oops"),
 			)
@@ -271,7 +274,7 @@ func TestConfirmSubscription(t *testing.T) {
 		"confirm failure aborts before token delete", func(t *testing.T) {
 			// No DeleteToken EXPECT: must not delete the token if confirm failed.
 			f := newFixture(t)
-			f.repo.EXPECT().FindTokenByValue(gomock.Any(), gomock.Any()).
+			f.tokens.EXPECT().FindTokenByValue(gomock.Any(), gomock.Any()).
 				Return(&domain.ConfirmationToken{ID: 7, SubscriptionID: 42}, nil)
 			f.repo.EXPECT().ConfirmSubscription(
 				gomock.Any(),
@@ -287,10 +290,10 @@ func TestConfirmSubscription(t *testing.T) {
 		"delete-token failure swallowed", func(t *testing.T) {
 			// Sub is confirmed; failing to delete the spent token is a log line, not a user error.
 			f := newFixture(t)
-			f.repo.EXPECT().FindTokenByValue(gomock.Any(), gomock.Any()).
+			f.tokens.EXPECT().FindTokenByValue(gomock.Any(), gomock.Any()).
 				Return(&domain.ConfirmationToken{ID: 7, SubscriptionID: 42}, nil)
 			f.repo.EXPECT().ConfirmSubscription(gomock.Any(), uint(42)).Return(nil)
-			f.repo.EXPECT().DeleteToken(gomock.Any(), uint(7)).Return(errors.New("delete failed"))
+			f.tokens.EXPECT().DeleteToken(gomock.Any(), uint(7)).Return(errors.New("delete failed"))
 
 			require.NoError(t, f.svc.ConfirmSubscription(context.Background(), "tok"))
 		},

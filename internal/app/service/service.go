@@ -39,11 +39,6 @@ type TokenRepo interface {
 	DeleteToken(ctx context.Context, id uint) error
 }
 
-type SubscriptionRepository interface {
-	SubscriptionRepo
-	TokenRepo
-}
-
 type RepoValidator interface {
 	ValidateRepo(ctx context.Context, owner, repo string) error
 }
@@ -74,7 +69,8 @@ type Service struct {
 }
 
 func New(
-	repo SubscriptionRepository,
+	subs SubscriptionRepo,
+	tokens TokenRepo,
 	github RepoValidator,
 	notifier ConfirmationSender,
 	newToken TokenGenerator,
@@ -83,8 +79,8 @@ func New(
 		newToken = RandomToken
 	}
 	return &Service{
-		subs:     repo,
-		tokens:   repo,
+		subs:     subs,
+		tokens:   tokens,
 		github:   github,
 		notifier: notifier,
 		newToken: newToken,

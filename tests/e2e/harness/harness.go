@@ -146,7 +146,7 @@ func New(t *testing.T, opts ...Options) *Harness {
 	require.NoError(t, err)
 
 	note := service.NewEmailNotifier(baseURL, notifierConn)
-	svc := service.New(repo, gh, note, service.RandomToken)
+	svc := service.New(repo, repo, gh, note, service.RandomToken)
 	router := api.NewRouter(api.NewHandler(svc), o.APIKey)
 
 	srv := &http.Server{

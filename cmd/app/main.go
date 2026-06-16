@@ -117,7 +117,7 @@ func run() error {
 	defer func() { _ = notifierConn.Close() }()
 
 	note := service.NewEmailNotifier(cfg.BaseURL, notifierConn)
-	svc := service.New(repo, gh, note, service.RandomToken)
+	svc := service.New(repo, repo, gh, note, service.RandomToken)
 	scan := scanner.New(repo, fetcher, note, cfg.Scanner)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

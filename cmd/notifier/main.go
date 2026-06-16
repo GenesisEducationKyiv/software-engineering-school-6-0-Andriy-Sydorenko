@@ -97,14 +97,15 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	interceptors := []grpc.UnaryServerInterceptor{
-		grpcmw.RecoveryServerInterceptor(),
-		grpcmw.RequestIDServerInterceptor(),
-		notifier.MetricsInterceptor(),
-	}
+	interceptors := []grpc.UnaryServerInterceptor{grpcmw.RecoveryServerInterceptor()}
 	if cfg.InternalToken != "" {
 		interceptors = append(interceptors, grpcmw.AuthServerInterceptor(cfg.InternalToken))
 	}
+	interceptors = append(
+		interceptors,
+		grpcmw.RequestIDServerInterceptor(),
+		notifier.MetricsInterceptor(),
+	)
 	server := grpc.NewServer(grpc.ChainUnaryInterceptor(interceptors...))
 	notifierpb.RegisterNotifierServiceServer(server, notifier.NewGRPCServer(mailer))
 

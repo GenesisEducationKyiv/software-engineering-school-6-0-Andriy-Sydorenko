@@ -35,3 +35,11 @@ func (s *BaseSuite) SetupTest() {
 		s.H.GitHub.Reset()
 	}
 }
+
+// TearDownTest dumps container logs to the artifacts dir on failure, so a
+// CI-only e2e failure has something to inspect beyond the assertion message.
+func (s *BaseSuite) TearDownTest() {
+	if s.T().Failed() {
+		s.H.DumpContainerLogs(s.T())
+	}
+}

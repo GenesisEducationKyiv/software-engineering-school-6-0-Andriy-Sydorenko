@@ -21,6 +21,9 @@ coverage.*
 *.coverprofile
 profile.cov
 
+# E2E failure diagnostics (Playwright traces, container logs); uploaded by CI
+tests/e2e/_artifacts/
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 

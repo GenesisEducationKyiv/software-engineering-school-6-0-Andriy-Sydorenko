@@ -73,7 +73,20 @@ func (s *SubscribeSuite) page() playwright.Page {
 		BaseURL: playwright.String(s.H.BrowserBaseURL),
 	})
 	s.Require().NoError(err)
-	t.Cleanup(func() { _ = ctx.Close() })
+	s.Require().NoError(ctx.Tracing().Start(playwright.TracingStartOptions{
+		Screenshots: playwright.Bool(true),
+		Snapshots:   playwright.Bool(true),
+		Sources:     playwright.Bool(true),
+	}))
+	t.Cleanup(func() {
+		// Stop with a path saves the zip; a green run discards the trace.
+		if t.Failed() {
+			_ = ctx.Tracing().Stop(harness.ArtifactPath(t, "trace-"+harness.SanitizeName(t.Name())+".zip"))
+		} else {
+			_ = ctx.Tracing().Stop()
+		}
+		_ = ctx.Close()
+	})
 
 	p, err := ctx.NewPage()
 	s.Require().NoError(err)

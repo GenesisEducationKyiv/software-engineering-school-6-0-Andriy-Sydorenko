@@ -198,7 +198,7 @@ func openWithRetry(dsn string, attempts int, delay time.Duration) (*gorm.DB, err
 
 func truncateAll(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	if err := db.Exec(`TRUNCATE TABLE confirmation_tokens, subscriptions RESTART IDENTITY CASCADE`).Error; err != nil {
+	if err := db.Exec(`TRUNCATE TABLE confirmation_tokens, subscriptions, watched_repos RESTART IDENTITY CASCADE`).Error; err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }

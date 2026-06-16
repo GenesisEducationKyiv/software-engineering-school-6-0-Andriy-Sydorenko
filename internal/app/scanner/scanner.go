@@ -17,7 +17,8 @@ type Repository interface {
 		[]domain.Subscription,
 		error,
 	)
-	UpdateLastSeenTag(ctx context.Context, id uint, tag string) error
+	GetWatchedRepo(ctx context.Context, repo string) (*domain.WatchedRepo, error)
+	SaveWatchedRepoTag(ctx context.Context, repo, tag string) error
 }
 
 type ReleaseFetcher interface {
@@ -148,28 +149,37 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		return nil
 	}
 
+	watched, err := s.repo.GetWatchedRepo(ctx, repo)
+	if err != nil {
+		return err
+	}
+
+	// No new release, or first sighting: record the poll (stamps last_polled_at,
+	// and baselines the tag on first sighting) and stop. A first sighting is
+	// silent — the current release predates every subscription.
+	if watched == nil || !watched.IsNewRelease(tag) {
+		return s.repo.SaveWatchedRepoTag(ctx, repo, tag)
+	}
+
 	subs, err := s.repo.FindConfirmedSubscriptionsByRepo(ctx, repo)
 	if err != nil {
 		return err
 	}
 
+	// Advance the cursor before notifying: a failed persist re-fires next scan
+	// (no missed release) rather than letting a successful notify re-send.
+	if err := s.repo.SaveWatchedRepoTag(ctx, repo, tag); err != nil {
+		slog.ErrorContext(
+			ctx, "scanner: failed to save watched repo tag",
+			"repo", repo,
+			"tag", tag,
+			"err", err,
+		)
+		return nil
+	}
+
 	for i := range subs {
 		sub := &subs[i]
-		if !sub.IsNewTag(tag) {
-			continue
-		}
-		previous := sub.LastSeenTag
-		if err := s.repo.UpdateLastSeenTag(ctx, sub.ID, tag); err != nil {
-			slog.ErrorContext(
-				ctx, "scanner: failed to update last_seen_tag",
-				"id", sub.ID,
-				"err", err,
-			)
-			continue
-		}
-		if previous == "" {
-			continue
-		}
 		if err := s.notifier.SendReleaseNotification(
 			ctx,
 			sub.Email,

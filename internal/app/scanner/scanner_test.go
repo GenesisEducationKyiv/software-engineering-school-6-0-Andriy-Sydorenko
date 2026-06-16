@@ -38,33 +38,21 @@ func TestNewReleaseNotifiesAll(t *testing.T) {
 	f := newFixture(t)
 	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
+	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "golang/go").Return(
+		&domain.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
+	)
 	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return(
 		[]domain.Subscription{
-			{
-				ID: 1, Email: "a@x.com", Repo: "golang/go", LastSeenTag: "v1.0",
-				UnsubscribeToken: "uA",
-			},
-			{
-				ID: 2, Email: "b@x.com", Repo: "golang/go", LastSeenTag: "v1.0",
-				UnsubscribeToken: "uB",
-			},
+			{ID: 1, Email: "a@x.com", Repo: "golang/go", UnsubscribeToken: "uA"},
+			{ID: 2, Email: "b@x.com", Repo: "golang/go", UnsubscribeToken: "uB"},
 		}, nil,
 	)
-	f.repo.EXPECT().UpdateLastSeenTag(gomock.Any(), uint(1), "v1.1").Return(nil)
-	f.repo.EXPECT().UpdateLastSeenTag(gomock.Any(), uint(2), "v1.1").Return(nil)
+	f.repo.EXPECT().SaveWatchedRepoTag(gomock.Any(), "golang/go", "v1.1").Return(nil)
 	f.notifier.EXPECT().SendReleaseNotification(
-		gomock.Any(),
-		"a@x.com",
-		"golang/go",
-		"v1.1",
-		"uA",
+		gomock.Any(), "a@x.com", "golang/go", "v1.1", "uA",
 	).Return(nil)
 	f.notifier.EXPECT().SendReleaseNotification(
-		gomock.Any(),
-		"b@x.com",
-		"golang/go",
-		"v1.1",
-		"uB",
+		gomock.Any(), "b@x.com", "golang/go", "v1.1", "uB",
 	).Return(nil)
 
 	f.scanner.runOnce(context.Background())
@@ -74,33 +62,30 @@ func TestSameTagNoNotification(t *testing.T) {
 	f := newFixture(t)
 	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.0", nil)
-	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return(
-		[]domain.Subscription{
-			{ID: 1, Email: "a@x.com", Repo: "golang/go", LastSeenTag: "v1.0"},
-		}, nil,
+	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "golang/go").Return(
+		&domain.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
 	)
-	// No Update/Send EXPECT: tag unchanged ⇒ silent.
+	// Tag unchanged: record the poll (last_polled_at), but no subs fetch / Send.
+	f.repo.EXPECT().SaveWatchedRepoTag(gomock.Any(), "golang/go", "v1.0").Return(nil)
 
 	f.scanner.runOnce(context.Background())
 }
 
 func TestFirstBaselineSilent(t *testing.T) {
-	// First sighting: persist tag, skip email — otherwise every new sub gets spam for the current release.
+	// First sighting: persist the baseline, skip email — the current release
+	// predates every subscription, so it's new to no one.
 	f := newFixture(t)
 	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
-	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return(
-		[]domain.Subscription{
-			{ID: 1, LastSeenTag: ""},
-		}, nil,
-	)
-	f.repo.EXPECT().UpdateLastSeenTag(gomock.Any(), uint(1), "v1.1").Return(nil)
+	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "golang/go").Return(nil, nil)
+	f.repo.EXPECT().SaveWatchedRepoTag(gomock.Any(), "golang/go", "v1.1").Return(nil)
+	// No subs fetch / Send.
 
 	f.scanner.runOnce(context.Background())
 }
 
 func TestEmptyTagSkips(t *testing.T) {
-	// Empty tag = "no releases yet" — must short-circuit before fetching subs.
+	// Empty tag = "no releases yet" — must short-circuit before touching the cursor.
 	f := newFixture(t)
 	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"owner/empty"}, nil)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "owner", "empty").Return("", nil)
@@ -120,23 +105,18 @@ func TestRateLimitAbortsCycle(t *testing.T) {
 func TestInvalidRepoFormatContinues(t *testing.T) {
 	f := newFixture(t)
 	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return(
-		[]string{
-			"invalid", "golang/go",
-		}, nil,
+		[]string{"invalid", "golang/go"}, nil,
 	)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
-	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return(
-		[]domain.Subscription{
-			{ID: 1, Email: "a@x.com", Repo: "golang/go", LastSeenTag: "v1.0"},
-		}, nil,
+	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "golang/go").Return(
+		&domain.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
 	)
-	f.repo.EXPECT().UpdateLastSeenTag(gomock.Any(), uint(1), "v1.1").Return(nil)
+	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return(
+		[]domain.Subscription{{ID: 1, Email: "a@x.com", Repo: "golang/go"}}, nil,
+	)
+	f.repo.EXPECT().SaveWatchedRepoTag(gomock.Any(), "golang/go", "v1.1").Return(nil)
 	f.notifier.EXPECT().SendReleaseNotification(
-		gomock.Any(),
-		"a@x.com",
-		"golang/go",
-		"v1.1",
-		"",
+		gomock.Any(), "a@x.com", "golang/go", "v1.1", "",
 	).Return(nil)
 
 	f.scanner.runOnce(context.Background())
@@ -189,51 +169,47 @@ func TestPanicInOneRepoDoesNotKillCycle(t *testing.T) {
 		func(_ context.Context, _, _ string) { panic("synthetic panic") },
 	)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "good", "two").Return("v2.0", nil)
+	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "good/two").Return(
+		&domain.WatchedRepo{Repo: "good/two", LastSeenTag: "v1.0"}, nil,
+	)
 	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "good/two").Return(
 		[]domain.Subscription{
-			{
-				ID: 1, Email: "ok@x.com", Repo: "good/two", LastSeenTag: "v1.0",
-				UnsubscribeToken: "u",
-			},
+			{ID: 1, Email: "ok@x.com", Repo: "good/two", UnsubscribeToken: "u"},
 		}, nil,
 	)
-	f.repo.EXPECT().UpdateLastSeenTag(gomock.Any(), uint(1), "v2.0").Return(nil)
+	f.repo.EXPECT().SaveWatchedRepoTag(gomock.Any(), "good/two", "v2.0").Return(nil)
 	f.notifier.EXPECT().SendReleaseNotification(
-		gomock.Any(),
-		"ok@x.com",
-		"good/two",
-		"v2.0",
-		"u",
+		gomock.Any(), "ok@x.com", "good/two", "v2.0", "u",
 	).Return(nil)
 
 	f.scanner.runOnce(context.Background())
 }
 
-func TestUpdateTagFailureSkipsNotification(t *testing.T) {
-	// Persist precedes notify — otherwise a failed persist re-fires on the next scan.
+func TestSaveTagFailureSkipsNotification(t *testing.T) {
+	// Persist precedes notify — a failed persist re-fires next scan instead of
+	// notifying on a cursor that didn't move.
 	f := newFixture(t)
 	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
+	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "golang/go").Return(
+		&domain.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
+	)
 	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return(
 		[]domain.Subscription{
-			{
-				ID: 1, Email: "a@x.com", Repo: "golang/go", LastSeenTag: "v1.0",
-				UnsubscribeToken: "u",
-			},
+			{ID: 1, Email: "a@x.com", Repo: "golang/go", UnsubscribeToken: "u"},
 		}, nil,
 	)
-	f.repo.EXPECT().UpdateLastSeenTag(
-		gomock.Any(),
-		uint(1),
-		"v1.1",
+	f.repo.EXPECT().SaveWatchedRepoTag(
+		gomock.Any(), "golang/go", "v1.1",
 	).Return(errors.New("db write failed"))
+	// No Send EXPECT.
 
 	f.scanner.runOnce(context.Background())
 }
 
-func TestIsNewTagContract(t *testing.T) {
-	s := &domain.Subscription{LastSeenTag: "v1.0"}
-	assert.True(t, s.IsNewTag("v1.1"))
-	assert.False(t, s.IsNewTag("v1.0"))
-	assert.False(t, s.IsNewTag(""), "empty incoming must not be treated as a regression")
+func TestIsNewReleaseContract(t *testing.T) {
+	w := &domain.WatchedRepo{LastSeenTag: "v1.0"}
+	assert.True(t, w.IsNewRelease("v1.1"))
+	assert.False(t, w.IsNewRelease("v1.0"))
+	assert.False(t, w.IsNewRelease(""), "empty incoming must not be treated as a regression")
 }

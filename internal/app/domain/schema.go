@@ -6,10 +6,9 @@ type SubscribeRequest struct {
 }
 
 type SubscriptionResponse struct {
-	Email       string `json:"email"`
-	Repo        string `json:"repo"`
-	Confirmed   bool   `json:"confirmed"`
-	LastSeenTag string `json:"last_seen_tag"`
+	Email     string `json:"email"`
+	Repo      string `json:"repo"`
+	Confirmed bool   `json:"confirmed"`
 }
 
 type ErrorResponse struct {
@@ -22,10 +21,9 @@ type MessageResponse struct {
 
 func ToSubscriptionResponse(s *Subscription) SubscriptionResponse {
 	return SubscriptionResponse{
-		Email:       s.Email,
-		Repo:        s.Repo,
-		Confirmed:   s.Confirmed,
-		LastSeenTag: s.LastSeenTag,
+		Email:     s.Email,
+		Repo:      s.Repo,
+		Confirmed: s.Confirmed,
 	}
 }
 

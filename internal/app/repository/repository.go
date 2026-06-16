@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
 )
@@ -125,9 +126,30 @@ func (r *Repository) FindConfirmedSubscriptionsByRepo(
 	return subs, err
 }
 
-func (r *Repository) UpdateLastSeenTag(ctx context.Context, id uint, tag string) error {
+// GetWatchedRepo returns the repo's release cursor, or nil if the repo has
+// never been scanned (caller treats nil as "first sighting").
+func (r *Repository) GetWatchedRepo(ctx context.Context, repo string) (*domain.WatchedRepo, error) {
+	var w domain.WatchedRepo
+	err := r.db.WithContext(ctx).
+		Where("repo = ?", repo).
+		First(&w).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &w, err
+}
+
+// SaveWatchedRepoTag upserts the repo's cursor: insert on first sighting, else
+// update the tag and stamp last_polled_at. Called on every poll (the tag is the
+// same on a no-change poll), so it doubles as the "we polled this repo" record.
+func (r *Repository) SaveWatchedRepoTag(ctx context.Context, repo, tag string) error {
 	return r.db.WithContext(ctx).
-		Model(&domain.Subscription{}).
-		Where("id = ?", id).
-		Update("last_seen_tag", tag).Error
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "repo"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"last_seen_tag":  tag,
+				"last_polled_at": gorm.Expr("now()"),
+			}),
+		}).
+		Create(&domain.WatchedRepo{Repo: repo, LastSeenTag: tag}).Error
 }

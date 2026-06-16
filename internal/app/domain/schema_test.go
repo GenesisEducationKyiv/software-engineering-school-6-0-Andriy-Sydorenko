@@ -14,7 +14,6 @@ func TestToSubscriptionResponse(t *testing.T) {
 		Email:            "a@b.com",
 		Repo:             "golang/go",
 		Confirmed:        true,
-		LastSeenTag:      "v1.22.0",
 		UnsubscribeToken: "secret-should-never-leak",
 	}
 	got := ToSubscriptionResponse(s)
@@ -22,15 +21,13 @@ func TestToSubscriptionResponse(t *testing.T) {
 	assert.Equal(t, s.Email, got.Email)
 	assert.Equal(t, s.Repo, got.Repo)
 	assert.Equal(t, s.Confirmed, got.Confirmed)
-	assert.Equal(t, s.LastSeenTag, got.LastSeenTag)
 }
 
 func TestSubscriptionResponseJSONShape(t *testing.T) {
 	resp := SubscriptionResponse{
-		Email:       "a@b.com",
-		Repo:        "golang/go",
-		Confirmed:   true,
-		LastSeenTag: "v1",
+		Email:     "a@b.com",
+		Repo:      "golang/go",
+		Confirmed: true,
 	}
 
 	b, err := json.Marshal(resp)
@@ -39,7 +36,7 @@ func TestSubscriptionResponseJSONShape(t *testing.T) {
 	var generic map[string]any
 	require.NoError(t, json.Unmarshal(b, &generic))
 
-	wantKeys := []string{"email", "repo", "confirmed", "last_seen_tag"}
+	wantKeys := []string{"email", "repo", "confirmed"}
 	assert.Len(t, generic, len(wantKeys), "no unexpected fields in public JSON")
 	for _, k := range wantKeys {
 		assert.Contains(t, generic, k)

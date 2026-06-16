@@ -179,7 +179,7 @@ func TestGetSubscriptions(t *testing.T) {
 			r, svc := newTestRouter(t)
 			svc.EXPECT().GetSubscriptions(gomock.Any(), "a@b.com").Return(
 				[]domain.SubscriptionResponse{
-					{Email: "a@b.com", Repo: "golang/go", Confirmed: true, LastSeenTag: "v1"},
+					{Email: "a@b.com", Repo: "golang/go", Confirmed: true},
 				}, nil,
 			)
 

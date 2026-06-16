@@ -71,18 +71,33 @@ func (mr *MockRepositoryMockRecorder) FindDistinctConfirmedRepos(ctx any) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindDistinctConfirmedRepos", reflect.TypeOf((*MockRepository)(nil).FindDistinctConfirmedRepos), ctx)
 }
 
-// UpdateLastSeenTag mocks base method.
-func (m *MockRepository) UpdateLastSeenTag(ctx context.Context, id uint, tag string) error {
+// GetWatchedRepo mocks base method.
+func (m *MockRepository) GetWatchedRepo(ctx context.Context, repo string) (*domain.WatchedRepo, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateLastSeenTag", ctx, id, tag)
+	ret := m.ctrl.Call(m, "GetWatchedRepo", ctx, repo)
+	ret0, _ := ret[0].(*domain.WatchedRepo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetWatchedRepo indicates an expected call of GetWatchedRepo.
+func (mr *MockRepositoryMockRecorder) GetWatchedRepo(ctx, repo any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWatchedRepo", reflect.TypeOf((*MockRepository)(nil).GetWatchedRepo), ctx, repo)
+}
+
+// SaveWatchedRepoTag mocks base method.
+func (m *MockRepository) SaveWatchedRepoTag(ctx context.Context, repo, tag string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SaveWatchedRepoTag", ctx, repo, tag)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// UpdateLastSeenTag indicates an expected call of UpdateLastSeenTag.
-func (mr *MockRepositoryMockRecorder) UpdateLastSeenTag(ctx, id, tag any) *gomock.Call {
+// SaveWatchedRepoTag indicates an expected call of SaveWatchedRepoTag.
+func (mr *MockRepositoryMockRecorder) SaveWatchedRepoTag(ctx, repo, tag any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateLastSeenTag", reflect.TypeOf((*MockRepository)(nil).UpdateLastSeenTag), ctx, id, tag)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SaveWatchedRepoTag", reflect.TypeOf((*MockRepository)(nil).SaveWatchedRepoTag), ctx, repo, tag)
 }
 
 // MockReleaseFetcher is a mock of ReleaseFetcher interface.

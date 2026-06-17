@@ -31,7 +31,10 @@ type Config struct {
 	Log           *logging.Config
 	Port          string
 	AdminAddr     string
-	InternalToken string // INTERNAL_API_TOKEN; empty disables gRPC auth
+	InternalToken string        // INTERNAL_API_TOKEN; empty disables gRPC auth
+	NATSURL       string        // NATS_URL
+	MaxDeliver    int           // redelivery cap before DLQ
+	AckWait       time.Duration // per-message ack deadline
 }
 
 func (c *Config) validate() error {
@@ -58,6 +61,9 @@ func loadCfg() (*Config, error) {
 		Port:          config.GetEnvOrDefault("PORT", "9090"),
 		AdminAddr:     config.GetEnvOrDefault("ADMIN_ADDR", ":9091"),
 		InternalToken: config.GetEnvOrDefault("INTERNAL_API_TOKEN", ""),
+		NATSURL:       config.GetEnvOrDefault("NATS_URL", "nats://localhost:4222"),
+		MaxDeliver:    5,
+		AckWait:       30 * time.Second,
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err

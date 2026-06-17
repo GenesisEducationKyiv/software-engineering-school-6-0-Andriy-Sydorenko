@@ -31,6 +31,9 @@ func TestSendConfirmationPublishesRenderedCommand(t *testing.T) {
 		if !strings.Contains(cmd.HTMLBody, "/api/confirm/ctok") {
 			t.Fatalf("html missing confirm url: %q", cmd.HTMLBody)
 		}
+		if cmd.EventID == "" {
+			t.Fatal("event_id should be set for correlation")
+		}
 		return nil
 	})
 

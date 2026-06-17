@@ -16,6 +16,7 @@ const (
 )
 
 type EmailCommand struct {
+	EventID        string `json:"event_id"`
 	RecipientEmail string `json:"recipient_email"`
 	Subject        string `json:"subject"`
 	HTMLBody       string `json:"html_body"`

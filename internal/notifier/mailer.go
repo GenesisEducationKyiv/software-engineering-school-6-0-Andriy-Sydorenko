@@ -62,3 +62,12 @@ func buildMIME(from, to, subject, htmlBody string) []byte {
 	fmt.Fprintf(&b, "%s\r\n", htmlBody)
 	return []byte(b.String())
 }
+
+// maskEmail keeps the first character and domain for safe logging of PII.
+func maskEmail(email string) string {
+	at := strings.IndexByte(email, '@')
+	if at <= 1 {
+		return "***"
+	}
+	return email[:1] + "***" + email[at:]
+}

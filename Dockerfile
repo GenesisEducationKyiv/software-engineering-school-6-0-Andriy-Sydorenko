@@ -34,8 +34,8 @@ COPY --from=builder /out/app /app/app
 EXPOSE 8080
 ENTRYPOINT ["/app/app"]
 
-# ---- notifier image (gRPC) ------------------------------------------------
+# ---- notifier image (NATS consumer; admin HTTP /metrics) ------------------
 FROM runtime-base AS notifier
 COPY --from=builder /out/notifier /app/notifier
-EXPOSE 9090
+EXPOSE 9091
 ENTRYPOINT ["/app/notifier"]

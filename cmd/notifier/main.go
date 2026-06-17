@@ -27,7 +27,6 @@ const envFile = ".env.notifier"
 type Config struct {
 	SMTP       *notifier.Config
 	Log        *logging.Config
-	Port       string
 	AdminAddr  string
 	NATSURL    string        // NATS_URL
 	MaxDeliver int           // redelivery cap before DLQ
@@ -35,8 +34,8 @@ type Config struct {
 }
 
 func (c *Config) validate() error {
-	if c.Port == "" {
-		return fmt.Errorf("port must be set")
+	if c.NATSURL == "" {
+		return fmt.Errorf("NATS_URL must be set")
 	}
 	return nil
 }
@@ -55,7 +54,6 @@ func loadCfg() (*Config, error) {
 	cfg := &Config{
 		SMTP:       smtpCfg,
 		Log:        logCfg,
-		Port:       config.GetEnvOrDefault("PORT", "9090"),
 		AdminAddr:  config.GetEnvOrDefault("ADMIN_ADDR", ":9091"),
 		NATSURL:    config.GetEnvOrDefault("NATS_URL", "nats://localhost:4222"),
 		MaxDeliver: 5,

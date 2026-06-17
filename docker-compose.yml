@@ -47,8 +47,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      notifier:
-        condition: service_started
       nats:
         condition: service_healthy
     environment:
@@ -61,9 +59,7 @@ services:
       PORT: 8080
       BASE_URL: ${BASE_URL:-http://localhost:8080}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      NOTIFIER_GRPC_ADDR: notifier:9090
       NATS_URL: nats://nats:4222
-      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
       SCAN_INTERVAL: ${SCAN_INTERVAL:-5m}
       API_KEY: ${API_KEY:-}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -82,9 +78,7 @@ services:
         condition: service_healthy
     environment:
       NATS_URL: nats://nats:4222
-      PORT: 9090
       ADMIN_ADDR: ":9091"
-      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME}

@@ -16,11 +16,12 @@ import (
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/api"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/cache"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/notifierclient"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/natspublisher"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/scanner"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/config"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/logging"
 
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/db"
@@ -30,19 +31,17 @@ import (
 const envFile = ".env"
 
 type Config struct {
-	DB            *database.Config
-	Redis         *cache.Config
-	GitHub        *githubclient.Config
-	Scanner       *scanner.Config
-	Log           *logging.Config
-	Port          string
-	ReadTimeout   time.Duration
-	WriteTimeout  time.Duration
-	APIKey        string
-	NotifierAddr  string // NOTIFIER_GRPC_ADDR, e.g. "notifier:9090"
-	NotifierToken string // INTERNAL_API_TOKEN; empty disables gRPC auth
-	BaseURL       string // BASE_URL for confirmation/unsubscribe links in emails
-	NATSURL       string // NATS_URL, e.g. "nats://localhost:4222"
+	DB           *database.Config
+	Redis        *cache.Config
+	GitHub       *githubclient.Config
+	Scanner      *scanner.Config
+	Log          *logging.Config
+	Port         string
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	APIKey       string
+	BaseURL      string // BASE_URL for confirmation/unsubscribe links in emails
+	NATSURL      string // NATS_URL, e.g. "nats://localhost:4222"
 }
 
 func (c *Config) validate() error {
@@ -71,19 +70,17 @@ func loadCfg() (*Config, error) {
 	}
 
 	cfg := &Config{
-		DB:            dbCfg,
-		Redis:         redisCfg,
-		Scanner:       scannerCfg,
-		GitHub:        githubCfg,
-		Log:           logCfg,
-		Port:          config.GetEnvOrDefault("PORT", "8080"),
-		ReadTimeout:   config.GetEnvDuration("READ_TIMEOUT", 10*time.Second),
-		WriteTimeout:  config.GetEnvDuration("WRITE_TIMEOUT", 10*time.Second),
-		APIKey:        config.GetEnvOrDefault("API_KEY", ""),
-		NotifierAddr:  config.GetEnvOrDefault("NOTIFIER_GRPC_ADDR", "localhost:9090"),
-		NotifierToken: config.GetEnvOrDefault("INTERNAL_API_TOKEN", ""),
-		BaseURL:       config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
-		NATSURL:       config.GetEnvOrDefault("NATS_URL", "nats://localhost:4222"),
+		DB:           dbCfg,
+		Redis:        redisCfg,
+		Scanner:      scannerCfg,
+		GitHub:       githubCfg,
+		Log:          logCfg,
+		Port:         config.GetEnvOrDefault("PORT", "8080"),
+		ReadTimeout:  config.GetEnvDuration("READ_TIMEOUT", 10*time.Second),
+		WriteTimeout: config.GetEnvDuration("WRITE_TIMEOUT", 10*time.Second),
+		APIKey:       config.GetEnvOrDefault("API_KEY", ""),
+		BaseURL:      config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
+		NATSURL:      config.GetEnvOrDefault("NATS_URL", "nats://localhost:4222"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -112,13 +109,16 @@ func run() error {
 	repo := repository.New(db)
 	gh := buildGitHubClient(cfg)
 
-	notifierConn, err := notifierclient.Dial(cfg.NotifierAddr, cfg.NotifierToken)
+	nc, js, err := natsbus.Connect(cfg.NATSURL)
 	if err != nil {
-		return fmt.Errorf("dial notifier: %w", err)
+		return fmt.Errorf("connect nats: %w", err)
 	}
-	defer func() { _ = notifierConn.Close() }()
+	defer func() { _ = nc.Drain() }()
+	if err := natsbus.EnsureStreams(context.Background(), js); err != nil {
+		return fmt.Errorf("ensure streams: %w", err)
+	}
 
-	note := service.NewEmailNotifier(cfg.BaseURL, notifierConn)
+	note := service.NewEmailNotifier(cfg.BaseURL, natspublisher.New(js))
 	svc := service.New(repo, repo, gh, note, service.RandomToken)
 	scan := scanner.New(repo, gh, note, cfg.Scanner)
 

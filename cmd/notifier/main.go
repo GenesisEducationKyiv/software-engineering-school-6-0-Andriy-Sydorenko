@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,11 +13,9 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"google.golang.org/grpc"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/config"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notifierpb"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/grpcmw"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/logging"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
@@ -27,14 +24,13 @@ import (
 const envFile = ".env.notifier"
 
 type Config struct {
-	SMTP          *notifier.Config
-	Log           *logging.Config
-	Port          string
-	AdminAddr     string
-	InternalToken string        // INTERNAL_API_TOKEN; empty disables gRPC auth
-	NATSURL       string        // NATS_URL
-	MaxDeliver    int           // redelivery cap before DLQ
-	AckWait       time.Duration // per-message ack deadline
+	SMTP       *notifier.Config
+	Log        *logging.Config
+	Port       string
+	AdminAddr  string
+	NATSURL    string        // NATS_URL
+	MaxDeliver int           // redelivery cap before DLQ
+	AckWait    time.Duration // per-message ack deadline
 }
 
 func (c *Config) validate() error {
@@ -56,14 +52,13 @@ func loadCfg() (*Config, error) {
 	}
 
 	cfg := &Config{
-		SMTP:          smtpCfg,
-		Log:           logCfg,
-		Port:          config.GetEnvOrDefault("PORT", "9090"),
-		AdminAddr:     config.GetEnvOrDefault("ADMIN_ADDR", ":9091"),
-		InternalToken: config.GetEnvOrDefault("INTERNAL_API_TOKEN", ""),
-		NATSURL:       config.GetEnvOrDefault("NATS_URL", "nats://localhost:4222"),
-		MaxDeliver:    5,
-		AckWait:       30 * time.Second,
+		SMTP:       smtpCfg,
+		Log:        logCfg,
+		Port:       config.GetEnvOrDefault("PORT", "9090"),
+		AdminAddr:  config.GetEnvOrDefault("ADMIN_ADDR", ":9091"),
+		NATSURL:    config.GetEnvOrDefault("NATS_URL", "nats://localhost:4222"),
+		MaxDeliver: 5,
+		AckWait:    30 * time.Second,
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -98,41 +93,28 @@ func run() error {
 		}
 	}()
 
-	listener, err := net.Listen("tcp", ":"+cfg.Port)
+	nc, js, err := natsbus.Connect(cfg.NATSURL)
 	if err != nil {
-		return fmt.Errorf("listen: %w", err)
+		return fmt.Errorf("connect nats: %w", err)
 	}
-	interceptors := []grpc.UnaryServerInterceptor{grpcmw.RecoveryServerInterceptor()}
-	if cfg.InternalToken != "" {
-		interceptors = append(interceptors, grpcmw.AuthServerInterceptor(cfg.InternalToken))
+	defer func() { _ = nc.Drain() }()
+	if err := natsbus.EnsureStreams(ctx, js); err != nil {
+		return fmt.Errorf("ensure streams: %w", err)
 	}
-	interceptors = append(
-		interceptors,
-		grpcmw.RequestIDServerInterceptor(),
-		notifier.MetricsInterceptor(),
-	)
-	server := grpc.NewServer(grpc.ChainUnaryInterceptor(interceptors...))
-	notifierpb.RegisterNotifierServiceServer(server, notifier.NewGRPCServer(mailer))
 
-	go func() {
-		<-ctx.Done()
-		stopped := make(chan struct{})
-		go func() {
-			server.GracefulStop()
-			close(stopped)
-		}()
-		select {
-		case <-stopped:
-		case <-time.After(8 * time.Second):
-			server.Stop() // force-close if a hung in-flight RPC won't drain
-		}
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = adminSrv.Shutdown(shutdownCtx)
-	}()
+	cc, err := notifier.Subscribe(ctx, js, cfg.MaxDeliver, cfg.AckWait, notifier.NewHandler(mailer))
+	if err != nil {
+		return fmt.Errorf("subscribe: %w", err)
+	}
+	defer cc.Stop()
 
-	slog.Info("notifier listening", "grpc", listener.Addr().String(), "admin", cfg.AdminAddr)
-	return server.Serve(listener)
+	slog.Info("notifier consuming", "admin", cfg.AdminAddr)
+	<-ctx.Done()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = adminSrv.Shutdown(shutdownCtx)
+	return nil
 }
 
 func main() {

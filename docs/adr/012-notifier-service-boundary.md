@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Partially supersedes ADR-003 — notifier domain only; its reasoning still holds for the API + scanner.
+Accepted (boundary). **Transport superseded by [ADR-013](013-message-broker-nats-jetstream.md)** — the app↔notifier hop is now NATS + JetStream, not gRPC. The two-binary boundary and stateless-notifier rationale below still hold; the gRPC transport, interceptors, and benchmark described here have been removed. Partially supersedes ADR-003 — notifier domain only; its reasoning still holds for the API + scanner.
 
 ---
 

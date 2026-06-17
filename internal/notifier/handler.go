@@ -26,7 +26,7 @@ func NewHandler(m Mailer) Handler {
 			return fmt.Errorf("send email: %w", err)
 		}
 		sendDuration.Observe(time.Since(start).Seconds())
-		slog.Info("notify: sent", "subject", subject, "to", maskEmail(cmd.RecipientEmail))
+		slog.Info("notify: sent", "event_id", cmd.EventID, "subject", subject, "to", maskEmail(cmd.RecipientEmail))
 		return nil
 	}
 }

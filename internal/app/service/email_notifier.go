@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"log/slog"
+
+	"github.com/google/uuid"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notify"
 )
@@ -27,9 +30,11 @@ func (n *EmailNotifier) SendConfirmation(
 	if err != nil {
 		return err
 	}
+	eventID := uuid.NewString()
+	slog.Info("notify: published", "event_id", eventID, "subject", notify.SubjectConfirmation, "repo", repo)
 	return n.publisher.Publish(
 		ctx, notify.SubjectConfirmation, notify.ConfirmationDedupID(token),
-		notify.EmailCommand{RecipientEmail: msg.To, Subject: msg.Subject, HTMLBody: msg.HTMLBody},
+		notify.EmailCommand{EventID: eventID, RecipientEmail: msg.To, Subject: msg.Subject, HTMLBody: msg.HTMLBody},
 	)
 }
 
@@ -41,8 +46,10 @@ func (n *EmailNotifier) SendReleaseNotification(
 	if err != nil {
 		return err
 	}
+	eventID := uuid.NewString()
+	slog.Info("notify: published", "event_id", eventID, "subject", notify.SubjectRelease, "repo", repo, "tag", tag)
 	return n.publisher.Publish(
 		ctx, notify.SubjectRelease, notify.ReleaseDedupID(repo, tag, email),
-		notify.EmailCommand{RecipientEmail: msg.To, Subject: msg.Subject, HTMLBody: msg.HTMLBody},
+		notify.EmailCommand{EventID: eventID, RecipientEmail: msg.To, Subject: msg.Subject, HTMLBody: msg.HTMLBody},
 	)
 }

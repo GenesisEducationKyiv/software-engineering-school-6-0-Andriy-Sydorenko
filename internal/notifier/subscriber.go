@@ -27,6 +27,17 @@ const (
 	actionTerm
 )
 
+func (a action) label() string {
+	switch a {
+	case actionNak:
+		return "nak"
+	case actionTerm:
+		return "term"
+	default:
+		return "ack"
+	}
+}
+
 func classify(err error, numDelivered, maxDeliver int) action {
 	switch {
 	case err == nil:
@@ -67,7 +78,9 @@ func Subscribe(
 			if md, mderr := msg.Metadata(); mderr == nil && md.NumDelivered <= math.MaxInt {
 				numDelivered = int(md.NumDelivered)
 			}
-			switch classify(herr, numDelivered, maxDeliver) {
+			act := classify(herr, numDelivered, maxDeliver)
+			messagesTotal.WithLabelValues(msg.Subject(), act.label()).Inc()
+			switch act {
 			case actionAck:
 				_ = msg.Ack()
 			case actionNak:

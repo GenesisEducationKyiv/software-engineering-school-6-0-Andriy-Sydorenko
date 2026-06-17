@@ -42,6 +42,7 @@ type Config struct {
 	NotifierAddr  string // NOTIFIER_GRPC_ADDR, e.g. "notifier:9090"
 	NotifierToken string // INTERNAL_API_TOKEN; empty disables gRPC auth
 	BaseURL       string // BASE_URL for confirmation/unsubscribe links in emails
+	NATSURL       string // NATS_URL, e.g. "nats://localhost:4222"
 }
 
 func (c *Config) validate() error {
@@ -82,6 +83,7 @@ func loadCfg() (*Config, error) {
 		NotifierAddr:  config.GetEnvOrDefault("NOTIFIER_GRPC_ADDR", "localhost:9090"),
 		NotifierToken: config.GetEnvOrDefault("INTERNAL_API_TOKEN", ""),
 		BaseURL:       config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
+		NATSURL:       config.GetEnvOrDefault("NATS_URL", "nats://localhost:4222"),
 	}
 
 	if err := cfg.validate(); err != nil {

@@ -28,14 +28,14 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("scanner config: SCAN_INTERVAL must not be negative, got %s", c.Interval)
 	}
 	if c.Concurrency < 1 {
-		panic(fmt.Sprintf("config: SCAN_CONCURRENCY must be >= 1, got %d", c.Concurrency))
+		return fmt.Errorf("scanner config: SCAN_CONCURRENCY must be >= 1, got %d", c.Concurrency)
 	}
 	return nil
 }
 
 func LoadConfig() *Config {
 	return &Config{
-		config.GetEnvDuration("SCAN_INTERVAL", 5*time.Minute),
-		config.GetEnvInt("SCAN_CONCURRENCY", 8),
+		Interval:    config.GetEnvDuration("SCAN_INTERVAL", 5*time.Minute),
+		Concurrency: config.GetEnvInt("SCAN_CONCURRENCY", 8),
 	}
 }

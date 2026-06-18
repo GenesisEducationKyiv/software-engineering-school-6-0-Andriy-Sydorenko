@@ -40,13 +40,13 @@ func (c *Config) Validate() error {
 
 func LoadConfig() *Config {
 	return &Config{
-		config.GetEnvOrDefault("DATABASE_URL", ""),
-		config.GetEnvOrDefault("DB_HOST", "localhost"),
-		config.GetEnvOrDefault("DB_PORT", "5432"),
-		config.GetEnvOrDefault("DB_USER", ""),
-		config.GetEnvOrDefault("DB_PASSWORD", ""),
-		config.GetEnvOrDefault("DB_NAME", ""),
-		config.GetEnvOrDefault("DB_SSLMODE", "disable"),
+		URL:      config.GetEnvOrDefault("DATABASE_URL", ""),
+		Host:     config.GetEnvOrDefault("DB_HOST", "localhost"),
+		Port:     config.GetEnvOrDefault("DB_PORT", "5432"),
+		User:     config.GetEnvOrDefault("DB_USER", ""),
+		Password: config.GetEnvOrDefault("DB_PASSWORD", ""),
+		Name:     config.GetEnvOrDefault("DB_NAME", ""),
+		SSLMode:  config.GetEnvOrDefault("DB_SSLMODE", "disable"),
 	}
 }
 

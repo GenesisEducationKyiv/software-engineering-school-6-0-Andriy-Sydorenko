@@ -16,14 +16,17 @@ type Config struct {
 
 func LoadConfig() *Config {
 	return &Config{
-		config.GetEnvOrDefault("GITHUB_TOKEN", ""),
-		config.GetEnvDuration("GITHUB_REQUEST_TIMEOUT", 10*time.Second),
+		Token:          config.GetEnvOrDefault("GITHUB_TOKEN", ""),
+		RequestTimeout: config.GetEnvDuration("GITHUB_REQUEST_TIMEOUT", 10*time.Second),
 	}
 }
 
 func (c *Config) Validate() error {
 	if c.RequestTimeout <= 0 {
-		return fmt.Errorf("github config: GITHUB_TIMEOUT must be > 0, got %s", c.RequestTimeout)
+		return fmt.Errorf(
+			"github config: GITHUB_REQUEST_TIMEOUT must be > 0, got %s",
+			c.RequestTimeout,
+		)
 	}
 	return nil
 }

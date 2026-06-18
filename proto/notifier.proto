@@ -4,10 +4,6 @@ package notifier.v1;
 option go_package = "github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notifierpb;notifierpb";
 
 // NotifierService delivers pre-rendered transactional email.
-//
-// Delivery is at-least-once: a retried call may send the same email twice, so
-// callers must tolerate rare duplicates. The service is content-agnostic — the
-// caller renders the HTML; the notifier only sends it.
 service NotifierService {
   rpc SendEmail(SendEmailRequest) returns (SendEmailResponse);
 }

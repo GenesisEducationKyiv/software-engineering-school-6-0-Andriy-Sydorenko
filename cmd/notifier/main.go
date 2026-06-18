@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -42,8 +43,8 @@ func (c *Config) validate() error {
 }
 
 func loadCfg() (*Config, error) {
-	if err := godotenv.Load(envFile); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("load %s: %w", envFile, err)
+	if err := godotenv.Load(envFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("failed to load %s: %w", envFile, err)
 	}
 
 	smtpCfg := notifier.LoadConfig()

@@ -28,10 +28,10 @@ func (c *Config) Validate() error {
 
 func LoadConfig() *Config {
 	return &Config{
-		config.GetEnvOrDefault("REDIS_URL", ""),
-		config.GetEnvOrDefault("REDIS_HOST", ""),
-		config.GetEnvOrDefault("REDIS_PORT", "6379"),
-		config.GetEnvOrDefault("REDIS_PASSWORD", ""),
-		config.GetEnvOrDefault("REDIS_DB", "0"),
+		URL:      config.GetEnvOrDefault("REDIS_URL", ""),
+		Host:     config.GetEnvOrDefault("REDIS_HOST", ""),
+		Port:     config.GetEnvOrDefault("REDIS_PORT", "6379"),
+		Password: config.GetEnvOrDefault("REDIS_PASSWORD", ""),
+		DB:       config.GetEnvOrDefault("REDIS_DB", "0"),
 	}
 }

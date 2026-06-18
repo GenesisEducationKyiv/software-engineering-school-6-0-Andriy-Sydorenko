@@ -23,9 +23,9 @@ func (c *Config) Validate() error {
 
 func LoadConfig() *Config {
 	return &Config{
-		config.GetEnvOrDefault("SMTP_HOST", "smtp.gmail.com"),
-		config.GetEnvOrDefault("SMTP_PORT", "587"),
-		config.GetEnvOrDefault("SMTP_USERNAME", "some.email@email.com"),
-		config.GetEnvOrDefault("SMTP_PASSWORD", "some_password"),
+		Host:     config.GetEnvOrDefault("SMTP_HOST", ""),
+		Port:     config.GetEnvOrDefault("SMTP_PORT", "587"),
+		Username: config.GetEnvOrDefault("SMTP_USERNAME", ""),
+		Password: config.GetEnvOrDefault("SMTP_PASSWORD", ""),
 	}
 }

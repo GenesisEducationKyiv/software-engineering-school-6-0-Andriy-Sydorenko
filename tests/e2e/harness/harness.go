@@ -277,7 +277,7 @@ func startNATS(t *testing.T, ctx context.Context) (testcontainers.Container, str
 		ctx, testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{
 				Image:        natsImage,
-				Cmd:          []string{"-js"},
+				Cmd:          []string{"-js", "-m", "8222"},
 				ExposedPorts: []string{"4222/tcp"},
 				WaitingFor:   wait.ForLog("Server is ready").WithStartupTimeout(30 * time.Second),
 			},

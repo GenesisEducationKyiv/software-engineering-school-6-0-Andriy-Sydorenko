@@ -49,7 +49,7 @@ func startNATS(t *testing.T, ctx context.Context) string {
 		ctx, testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{
 				Image:        "nats:2.10-alpine",
-				Cmd:          []string{"-js"},
+				Cmd:          []string{"-js", "-m", "8222"},
 				ExposedPorts: []string{"4222/tcp"},
 				WaitingFor:   wait.ForLog("Server is ready").WithStartupTimeout(30 * time.Second),
 			},
@@ -92,8 +92,13 @@ func TestConsumerSendsDedupsAndDLQs(t *testing.T) {
 		5*time.Second,
 		50*time.Millisecond,
 	)
-	time.Sleep(500 * time.Millisecond)
-	require.Equal(t, 1, mailer.count(), "dedup should prevent a second send")
+	require.Never(
+		t,
+		func() bool { return mailer.count() > 1 },
+		500*time.Millisecond,
+		50*time.Millisecond,
+		"dedup should prevent a second send",
+	)
 
 	// DLQ: a malformed payload is permanent → dead-lettered, never sent.
 	_, err = js.Publish(

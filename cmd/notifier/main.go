@@ -37,6 +37,12 @@ func (c *Config) validate() error {
 	if c.NATSURL == "" {
 		return fmt.Errorf("NATS_URL must be set")
 	}
+	if c.MaxDeliver < 1 {
+		return fmt.Errorf("NATS_MAX_DELIVER must be >= 1, got %d", c.MaxDeliver)
+	}
+	if c.AckWait <= 0 {
+		return fmt.Errorf("NATS_ACK_WAIT must be > 0, got %s", c.AckWait)
+	}
 	return nil
 }
 
@@ -56,8 +62,8 @@ func loadCfg() (*Config, error) {
 		Log:        logCfg,
 		AdminAddr:  config.GetEnvOrDefault("ADMIN_ADDR", ":9091"),
 		NATSURL:    config.GetEnvOrDefault("NATS_URL", "nats://localhost:4222"),
-		MaxDeliver: 5,
-		AckWait:    30 * time.Second,
+		MaxDeliver: config.GetEnvInt("NATS_MAX_DELIVER", 5),
+		AckWait:    config.GetEnvDuration("NATS_ACK_WAIT", 30*time.Second),
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -97,7 +103,7 @@ func run() error {
 		return fmt.Errorf("connect nats: %w", err)
 	}
 	defer func() { _ = nc.Drain() }()
-	if err := natsbus.EnsureStreams(ctx, js); err != nil {
+	if err := natsbus.EnsureStreams(context.Background(), js); err != nil {
 		return fmt.Errorf("ensure streams: %w", err)
 	}
 

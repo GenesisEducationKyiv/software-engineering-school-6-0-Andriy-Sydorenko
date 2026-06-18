@@ -88,8 +88,15 @@ func Subscribe(
 				_ = msg.Nak()
 			case actionTerm:
 				slog.Error("notify: dead-lettering message", "subject", msg.Subject(), "err", herr)
-				if _, derr := js.Publish(ctx, notify.DLQSubject, msg.Data()); derr != nil {
-					slog.Error("notify: DLQ publish failed", "err", derr)
+				// Detached context: the DLQ park must survive shutdown cancellation.
+				dlqCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_, derr := js.Publish(dlqCtx, notify.DLQSubject, msg.Data())
+				cancel()
+				if derr != nil {
+					// Nak so a failed park stays redeliverable instead of being lost.
+					slog.Error("notify: DLQ publish failed, naking for retry", "subject", msg.Subject(), "err", derr)
+					_ = msg.Nak()
+					return
 				}
 				_ = msg.Term()
 			}

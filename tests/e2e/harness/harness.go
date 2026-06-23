@@ -1,7 +1,8 @@
 //go:build e2e
 
-// Package harness boots an in-process app instance against ephemeral
-// Postgres + Mailpit + NATS containers, for use by e2e tests.
+// Package harness boots the full subscribe-saga topology in-process — orchestrator,
+// subscription service, catalog, and notifier — against ephemeral Postgres (one per
+// service) + Mailpit + NATS containers, for use by e2e tests. No browser.
 package harness
 
 import (
@@ -24,194 +25,200 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/api"
-	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/db"
-	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/github"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/confirmationconsumer"
+	appeventpublisher "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/eventpublisher"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/natspublisher"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/releaseconsumer"
+	apprepo "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
+	appsaga "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/saga"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
+	catalogrepo "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/repository"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator"
+	orchestratorrepo "github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/repository"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/saga"
+
+	appdb "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/db"
+	catalogdb "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/db"
+	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/github"
+	orchestratordb "github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/db"
 )
 
 const (
-	// DefaultAPIKey is the value tests opt into when they want the API-key
-	// middleware actually enforced (Options.APIKey). Default is empty, which
-	// makes the middleware bypass — matches the unprotected dev/staging path.
-	DefaultAPIKey     = "test-key"
 	pgImage           = "postgres:16-alpine"
 	mailpitImage      = "axllent/mailpit:v1.20"
 	natsImage         = "nats:2.10-alpine"
-	containerStartTTL = 90 * time.Second
+	containerStartTTL = 120 * time.Second
 )
 
-// Harness holds the live app + its dependencies and exposes the URLs tests
-// need. All cleanup is registered via t.Cleanup.
+// Options is reserved for future per-suite tuning. Currently empty.
+type Options struct{}
+
+// Harness holds the live services + their dependencies and exposes the URLs and
+// DBs tests need. Cleanup is registered via t.Cleanup.
 type Harness struct {
-	BaseURL        string // app under test, reachable from the host (127.0.0.1)
-	BrowserBaseURL string // same app, reachable from inside the browser container
-	BrowserWSURL   string // CDP websocket endpoint for ConnectOverCDP
-	MailpitURL     string // Mailpit HTTP API root (http://host:port)
-	APIKey         string
-	DB             *gorm.DB
-	GitHub         *GitHubFixture // nil when Options.GHValidator overrides it
+	OrchestratorURL string // POST /subscribe
+	AppURL          string // confirm/unsubscribe/list
+	MailpitURL      string
+	SubDB           *gorm.DB
+	CatDB           *gorm.DB
+	OrchDB          *gorm.DB
+	GitHub          *GitHubFixture
 
-	pgC      testcontainers.Container
-	mailC    testcontainers.Container
-	natsC    testcontainers.Container
-	browserC testcontainers.Container
-	srv      *http.Server
-	natsConn *nats.Conn
-	consume  jetstream.ConsumeContext
+	containers map[string]testcontainers.Container
+	cleanups   []func()
 }
 
-// Options configures optional substitutions. Zero value = sensible defaults
-// (real GitHub client pointed at an in-process httptest fixture; see GitHub).
-type Options struct {
-	// GHValidator, when set, completely replaces the default GitHub
-	// fixture + real-client wiring. Tests that need the programmable
-	// fixture should leave this nil and use Harness.GitHub.SetBehavior.
-	GHValidator service.RepoValidator
-
-	// APIKey, when non-empty, enables the API-key middleware on protected
-	// routes. Default empty = middleware bypasses (matches unprotected
-	// dev/staging behavior and lets browser-form tests work).
-	APIKey string
-}
-
-// New boots Postgres + Mailpit + NATS containers and a fresh in-process app,
-// returning a ready-to-use Harness. Cleanup is registered with t.
-func New(t *testing.T, opts ...Options) *Harness {
+// New boots the containers + the four in-process services and returns a
+// ready-to-use Harness. Cleanup is registered with t.
+func New(t *testing.T, _ ...Options) *Harness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	ctx, cancel := context.WithTimeout(context.Background(), containerStartTTL)
 	defer cancel()
 
-	pgC := startPostgres(t, ctx)
-	mailC, smtpAddr, mailpitURL := startMailpit(t, ctx)
 	natsC, natsURL := startNATS(t, ctx)
+	mailC, smtp, mailpitURL := startMailpit(t, ctx)
+	subC, subDB := startMigratedPG(t, ctx, appdb.Migrate)
+	catC, catDB := startMigratedPG(t, ctx, catalogdb.Migrate)
+	orchC, orchDB := startMigratedPG(t, ctx, orchestratordb.Migrate)
 
-	dbURL, err := pgC.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-	db, err := database.NewPostgres(&database.Config{URL: dbURL})
-	require.NoError(t, err)
-	require.NoError(t, database.Migrate(db))
-
-	// Bind to 0.0.0.0 so the sidecar browser container can reach back
-	// via host.testcontainers.internal. Host-side code still uses
-	// 127.0.0.1:<port> through BaseURL.
-	listener, err := net.Listen("tcp", "0.0.0.0:0")
-	require.NoError(t, err)
-	appPort := listener.Addr().(*net.TCPAddr).Port
-	baseURL := fmt.Sprintf("http://127.0.0.1:%d", appPort)
-	browserBaseURL := fmt.Sprintf("http://host.testcontainers.internal:%d", appPort)
-
-	browserC, wsURL := startBrowser(t, ctx, appPort)
-
-	o := Options{}
-	if len(opts) > 0 {
-		o = opts[0]
-	}
-	var ghFix *GitHubFixture
-	gh := o.GHValidator
-	if gh == nil {
-		ghFix = newGitHubFixture()
-		gh = githubclient.NewClient(
-			&githubclient.Config{RequestTimeout: 10 * time.Second},
-			githubclient.WithBaseURL(ghFix.URL()),
-		)
-	}
-
-	repo := repository.New(db)
-
-	// Real notifier consumer, in-process, sending through Mailpit — so e2e
-	// exercises the actual publish → NATS → SMTP path, not a shortcut.
-	mailer := notifier.NewSMTPMailer(&notifier.Config{
-		Host:     smtpAddr.host,
-		Port:     smtpAddr.port,
-		Username: "harness@example.com",
-		Password: "harness",
-	})
-	natsConn, js, err := natsbus.Connect(natsURL)
+	nc, js, err := natsbus.Connect(natsURL)
 	require.NoError(t, err)
 	require.NoError(t, natsbus.EnsureStreams(ctx, js))
-	// context.Background(): the consumer must outlive New()'s startup ctx;
-	// it is stopped via consume.Stop() in shutdown().
-	consume, err := notifier.Subscribe(context.Background(), js, 5, 30*time.Second, notifier.NewHandler(mailer))
-	require.NoError(t, err)
 
-	note := service.NewEmailNotifier(baseURL, natspublisher.New(js))
-	svc := service.New(repo, repo, gh, note, service.RandomToken)
-	router := api.NewRouter(api.NewHandler(svc), o.APIKey)
-
-	srv := &http.Server{
-		Handler:           router,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
-	go func() {
-		// log.Printf, not t.Logf: this goroutine can outlive the test (nothing
-		// joins it on shutdown), and t.Logf after the test finishes panics.
-		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("harness http app: %v", err)
-		}
-	}()
+	ghFix := newGitHubFixture()
+	githubClient := githubclient.NewClient(
+		&githubclient.Config{RequestTimeout: 10 * time.Second},
+		githubclient.WithBaseURL(ghFix.URL()),
+	)
 
 	h := &Harness{
-		BaseURL:        baseURL,
-		BrowserBaseURL: browserBaseURL,
-		BrowserWSURL:   wsURL,
-		MailpitURL:     mailpitURL,
-		APIKey:         o.APIKey,
-		DB:             db,
-		GitHub:         ghFix,
-		pgC:            pgC,
-		mailC:          mailC,
-		natsC:          natsC,
-		browserC:       browserC,
-		srv:            srv,
-		natsConn:       natsConn,
-		consume:        consume,
+		MailpitURL: mailpitURL,
+		SubDB:      subDB, CatDB: catDB, OrchDB: orchDB,
+		GitHub:     ghFix,
+		containers: map[string]testcontainers.Container{"nats": natsC, "mailpit": mailC, "pg-subscription": subC, "pg-catalog": catC, "pg-orchestrator": orchC},
 	}
-	waitForHealth(t, h.BaseURL)
+
+	// notifier: real consumer → Mailpit SMTP, so e2e exercises publish → NATS → SMTP.
+	mailer := notifier.NewSMTPMailer(&notifier.Config{
+		Host: smtp.host, Port: smtp.port, Username: "harness@example.com", Password: "harness",
+	})
+	notifierConsume, err := notifier.Subscribe(context.Background(), js, 5, 30*time.Second, notifier.NewHandler(mailer))
+	require.NoError(t, err)
+
+	// HTTP servers (app + orchestrator) — listeners first so the app URL is known
+	// before the email composer (which builds confirm/unsub links) is wired.
+	appSrv, appURL, appListener := newServer(t)
+	orchSrv, orchURL, orchListener := newServer(t)
+	h.AppURL, h.OrchestratorURL = appURL, orchURL
+
+	catCleanup := h.wireCatalog(t, nc, js, catalogrepo.New(catDB), githubClient)
+	appRouter := h.wireSubscription(t, nc, js, apprepo.New(subDB), appURL)
+	coord := orchestrator.NewCoordinator(
+		orchestrator.NewNATSParticipants(nc, 5*time.Second),
+		orchestrator.NewNATSConfirmationPublisher(js),
+		orchestratorrepo.New(orchDB),
+		orchestrator.UUIDGen{},
+	)
+
+	appSrv.Handler = appRouter
+	orchSrv.Handler = orchestrator.NewRouter(orchestrator.NewHTTPHandler(coord))
+	serve(appSrv, appListener)
+	serve(orchSrv, orchListener)
+
+	h.cleanups = append(h.cleanups,
+		func() { _ = appSrv.Close() },
+		func() { _ = orchSrv.Close() },
+		catCleanup,
+		notifierConsume.Stop,
+		func() { _ = nc.Drain() },
+		ghFix.close,
+	)
+
+	waitForHealth(t, appURL)
+	waitForHealth(t, orchURL)
 	t.Cleanup(h.shutdown)
 	return h
 }
 
-// TruncateDB clears subscription rows between tests. Test suites that share a
-// Harness should call this in SetupTest.
+// wireCatalog registers the catalog saga handlers + the subscription.removed
+// cleanup consumer. Returns a cleanup for the consumer.
+func (h *Harness) wireCatalog(t *testing.T, nc *nats.Conn, js jetstream.JetStream, repo *catalogrepo.Repository, gh catalog.RepoValidator) func() {
+	t.Helper()
+	handler := catalog.NewHandler(repo, gh)
+	_, err := natsbus.RespondJSON(nc, saga.SubjCatalogRegister, saga.QueueCatalog, handler.Register)
+	require.NoError(t, err)
+	_, err = natsbus.RespondJSON(nc, saga.SubjCatalogRelease, saga.QueueCatalog, handler.Release)
+	require.NoError(t, err)
+	removed, err := natsbus.Consume(context.Background(), js, natsbus.ConsumerConfig{
+		Stream: saga.EventsStreamName, Durable: saga.DurableRemovedConsumer,
+		FilterSubject: saga.SubjSubscriptionRemoved, MaxDeliver: 5, AckWait: 30 * time.Second,
+	}, handler.OnSubscriptionRemoved)
+	require.NoError(t, err)
+	return removed.Stop
+}
+
+// wireSubscription registers the subscription saga handlers + release/confirmation
+// consumers and returns the HTTP router (confirm/unsubscribe/list).
+func (h *Harness) wireSubscription(t *testing.T, nc *nats.Conn, js jetstream.JetStream, repo *apprepo.Repository, appURL string) *gin.Engine {
+	t.Helper()
+	emailNotifier := service.NewEmailNotifier(appURL, natspublisher.New(js))
+	svc := service.New(repo, repo, appeventpublisher.New(js))
+	sagaHandler := appsaga.NewHandler(repo)
+
+	_, err := natsbus.RespondJSON(nc, saga.SubjSubscriptionCreate, saga.QueueSubscription, sagaHandler.Create)
+	require.NoError(t, err)
+	_, err = natsbus.RespondJSON(nc, saga.SubjSubscriptionCancel, saga.QueueSubscription, sagaHandler.Cancel)
+	require.NoError(t, err)
+
+	rel := releaseconsumer.New(repo, emailNotifier)
+	_, err = natsbus.Consume(context.Background(), js, natsbus.ConsumerConfig{
+		Stream: saga.EventsStreamName, Durable: saga.DurableReleaseConsumer,
+		FilterSubject: saga.SubjReleaseDetected, MaxDeliver: 5, AckWait: 30 * time.Second,
+	}, rel.Handle)
+	require.NoError(t, err)
+
+	conf := confirmationconsumer.New(emailNotifier)
+	_, err = natsbus.Consume(context.Background(), js, natsbus.ConsumerConfig{
+		Stream: saga.EventsStreamName, Durable: saga.DurableConfirmationConsumer,
+		FilterSubject: saga.SubjConfirmationRequested, MaxDeliver: 5, AckWait: 30 * time.Second,
+	}, conf.Handle)
+	require.NoError(t, err)
+
+	return api.NewRouter(api.NewHandler(svc), "")
+}
+
+func (h *Harness) shutdown() {
+	for _, fn := range h.cleanups {
+		fn()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for _, c := range h.containers {
+		_ = c.Terminate(ctx)
+	}
+}
+
+// TruncateDB clears mutable rows from all three service DBs between tests.
 func (h *Harness) TruncateDB(t *testing.T) {
 	t.Helper()
-	require.NoError(t, h.DB.Exec("TRUNCATE TABLE subscriptions RESTART IDENTITY CASCADE").Error)
+	require.NoError(t, h.SubDB.Exec("TRUNCATE confirmation_tokens, subscriptions RESTART IDENTITY CASCADE").Error)
+	require.NoError(t, h.CatDB.Exec("TRUNCATE repo_registrations, watched_repos RESTART IDENTITY CASCADE").Error)
+	require.NoError(t, h.OrchDB.Exec("TRUNCATE saga_log").Error)
 }
 
 // ResetMailpit deletes all captured messages from Mailpit.
 func (h *Harness) ResetMailpit(t *testing.T) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodDelete, h.MailpitURL+"/api/v1/messages", nil)
+	req, err := http.NewRequest(http.MethodDelete, h.MailpitURL+"/api/v1/messages", http.NoBody)
 	require.NoError(t, err)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
-}
-
-func (h *Harness) shutdown() {
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_ = h.srv.Shutdown(shutdownCtx)
-	h.consume.Stop()
-	_ = h.natsConn.Drain()
-	if h.GitHub != nil {
-		h.GitHub.close()
-	}
-	_ = h.pgC.Terminate(shutdownCtx)
-	_ = h.mailC.Terminate(shutdownCtx)
-	_ = h.natsC.Terminate(shutdownCtx)
-	if h.browserC != nil {
-		_ = h.browserC.Terminate(shutdownCtx)
-	}
 }
 
 type smtpAddr struct {
@@ -219,21 +226,40 @@ type smtpAddr struct {
 	port string
 }
 
-func startPostgres(t *testing.T, ctx context.Context) *postgres.PostgresContainer {
+func newServer(t *testing.T) (*http.Server, string, net.Listener) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := listener.Addr().(*net.TCPAddr).Port
+	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second}
+	return srv, fmt.Sprintf("http://127.0.0.1:%d", port), listener
+}
+
+func serve(srv *http.Server, listener net.Listener) {
+	go func() {
+		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("harness http: %v", err)
+		}
+	}()
+}
+
+func startMigratedPG(t *testing.T, ctx context.Context, migrate func(*gorm.DB) error) (testcontainers.Container, *gorm.DB) {
 	t.Helper()
 	c, err := postgres.Run(
 		ctx, pgImage,
-		postgres.WithDatabase("e2e"),
-		postgres.WithUsername("e2e"),
-		postgres.WithPassword("e2e"),
+		postgres.WithDatabase("e2e"), postgres.WithUsername("e2e"), postgres.WithPassword("e2e"),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(60*time.Second),
+				WithOccurrence(2).WithStartupTimeout(60*time.Second),
 		),
 	)
 	require.NoError(t, err)
-	return c
+	dsn, err := c.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+	db, err := appdb.NewPostgres(&appdb.Config{URL: dsn})
+	require.NoError(t, err)
+	require.NoError(t, migrate(db))
+	return c, db
 }
 
 func startMailpit(t *testing.T, ctx context.Context) (testcontainers.Container, smtpAddr, string) {
@@ -242,19 +268,12 @@ func startMailpit(t *testing.T, ctx context.Context) (testcontainers.Container, 
 		Image:        mailpitImage,
 		ExposedPorts: []string{"1025/tcp", "8025/tcp"},
 		Env: map[string]string{
-			// Make Mailpit advertise SMTP AUTH and accept any creds; the real
-			// mailer always sends PLAIN auth and net/smtp errors if unsupported.
 			"MP_SMTP_AUTH_ACCEPT_ANY":     "true",
 			"MP_SMTP_AUTH_ALLOW_INSECURE": "true",
 		},
 		WaitingFor: wait.ForHTTP("/api/v1/info").WithPort("8025/tcp").WithStartupTimeout(30 * time.Second),
 	}
-	c, err := testcontainers.GenericContainer(
-		ctx, testcontainers.GenericContainerRequest{
-			ContainerRequest: req,
-			Started:          true,
-		},
-	)
+	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
 	require.NoError(t, err)
 
 	host, err := c.Host(ctx)
@@ -263,34 +282,25 @@ func startMailpit(t *testing.T, ctx context.Context) (testcontainers.Container, 
 	require.NoError(t, err)
 	httpPort, err := c.MappedPort(ctx, "8025")
 	require.NoError(t, err)
-
-	return c, smtpAddr{host: host, port: smtp.Port()}, fmt.Sprintf(
-		"http://%s:%s",
-		host,
-		httpPort.Port(),
-	)
+	return c, smtpAddr{host: host, port: smtp.Port()}, fmt.Sprintf("http://%s:%s", host, httpPort.Port())
 }
 
 func startNATS(t *testing.T, ctx context.Context) (testcontainers.Container, string) {
 	t.Helper()
-	c, err := testcontainers.GenericContainer(
-		ctx, testcontainers.GenericContainerRequest{
-			ContainerRequest: testcontainers.ContainerRequest{
-				Image:        natsImage,
-				Cmd:          []string{"-js", "-m", "8222"},
-				ExposedPorts: []string{"4222/tcp"},
-				WaitingFor:   wait.ForLog("Server is ready").WithStartupTimeout(30 * time.Second),
-			},
-			Started: true,
+	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        natsImage,
+			Cmd:          []string{"-js", "-m", "8222"},
+			ExposedPorts: []string{"4222/tcp"},
+			WaitingFor:   wait.ForLog("Server is ready").WithStartupTimeout(30 * time.Second),
 		},
-	)
+		Started: true,
+	})
 	require.NoError(t, err)
-
 	host, err := c.Host(ctx)
 	require.NoError(t, err)
 	port, err := c.MappedPort(ctx, "4222")
 	require.NoError(t, err)
-
 	return c, fmt.Sprintf("nats://%s:%s", host, port.Port())
 }
 
@@ -307,5 +317,5 @@ func waitForHealth(t *testing.T, baseURL string) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("harness app never became healthy at %s", baseURL)
+	t.Fatalf("service never became healthy at %s", baseURL)
 }

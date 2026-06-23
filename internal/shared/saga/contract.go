@@ -13,13 +13,15 @@ const (
 
 // JetStream event stream + subjects (durable, at-least-once).
 const (
-	EventsStreamName        = "EVENTS"
-	EventsStreamSubject     = "events.>"
-	SubjReleaseDetected     = "events.release.detected"
-	SubjSubscriptionRemoved = "events.subscription.removed"
+	EventsStreamName          = "EVENTS"
+	EventsStreamSubject       = "events.>"
+	SubjReleaseDetected       = "events.release.detected"
+	SubjSubscriptionRemoved   = "events.subscription.removed"
+	SubjConfirmationRequested = "events.confirmation.requested"
 
-	DurableReleaseConsumer = "subscription-release"
-	DurableRemovedConsumer = "catalog-removed"
+	DurableReleaseConsumer      = "subscription-release"
+	DurableRemovedConsumer      = "catalog-removed"
+	DurableConfirmationConsumer = "subscription-confirmation"
 )
 
 type RegisterRepoCommand struct {
@@ -68,4 +70,14 @@ type ReleaseDetectedEvent struct {
 type SubscriptionRemovedEvent struct {
 	SubscriptionID string `json:"subscription_id"`
 	Repo           string `json:"repo"`
+}
+
+// ConfirmationRequestedEvent is the saga's post-commit terminal step: the
+// orchestrator emits it once the subscription is committed, and the subscription
+// service renders + publishes the confirmation email.
+type ConfirmationRequestedEvent struct {
+	Email        string `json:"email"`
+	Repo         string `json:"repo"`
+	ConfirmToken string `json:"confirm_token"`
+	UnsubToken   string `json:"unsub_token"`
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/api"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/confirmationconsumer"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/eventpublisher"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/natspublisher"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/releaseconsumer"
@@ -116,11 +117,12 @@ func run() error {
 	svc := service.New(repo, repo, eventpublisher.New(js))
 	sagaHandler := appsaga.NewHandler(repo)
 	relConsumer := releaseconsumer.New(repo, emailNotifier)
+	confConsumer := confirmationconsumer.New(emailNotifier)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	stopConsumers, err := startConsumers(ctx, nc, js, sagaHandler, relConsumer, cfg)
+	stopConsumers, err := startConsumers(ctx, nc, js, sagaHandler, relConsumer, confConsumer, cfg)
 	if err != nil {
 		return err
 	}
@@ -159,6 +161,7 @@ func startConsumers(
 	js jetstream.JetStream,
 	h *appsaga.Handler,
 	rc *releaseconsumer.Consumer,
+	cc *confirmationconsumer.Consumer,
 	cfg *Config,
 ) (func(), error) {
 	createSub, err := natsbus.RespondJSON(nc, saga.SubjSubscriptionCreate, saga.QueueSubscription, h.Create)
@@ -184,10 +187,26 @@ func startConsumers(
 		_ = cancelSub.Unsubscribe()
 		return nil, fmt.Errorf("consume %s: %w", saga.SubjReleaseDetected, err)
 	}
+	confirmation, err := natsbus.Consume(
+		ctx, js, natsbus.ConsumerConfig{
+			Stream:        saga.EventsStreamName,
+			Durable:       saga.DurableConfirmationConsumer,
+			FilterSubject: saga.SubjConfirmationRequested,
+			MaxDeliver:    cfg.MaxDeliver,
+			AckWait:       cfg.AckWait,
+		}, cc.Handle,
+	)
+	if err != nil {
+		_ = createSub.Unsubscribe()
+		_ = cancelSub.Unsubscribe()
+		release.Stop()
+		return nil, fmt.Errorf("consume %s: %w", saga.SubjConfirmationRequested, err)
+	}
 	return func() {
 		_ = createSub.Unsubscribe()
 		_ = cancelSub.Unsubscribe()
 		release.Stop()
+		confirmation.Stop()
 	}, nil
 }
 

@@ -146,10 +146,21 @@ func runRecoveryLoop(ctx context.Context, coord *orchestrator.Coordinator, inter
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := coord.Recover(ctx); err != nil {
-				slog.ErrorContext(ctx, "recovery sweep failed", "err", err)
-			}
+			runSweep(ctx, coord)
 		}
+	}
+}
+
+// runSweep runs one recovery pass, recovering from a panic so one bad saga never
+// kills the recovery loop for the process lifetime.
+func runSweep(ctx context.Context, coord *orchestrator.Coordinator) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.ErrorContext(ctx, "recovery sweep panicked", "panic", r)
+		}
+	}()
+	if err := coord.Recover(ctx); err != nil {
+		slog.ErrorContext(ctx, "recovery sweep failed", "err", err)
 	}
 }
 

@@ -124,11 +124,19 @@ func (c *Coordinator) recoverOne(ctx context.Context, rec *SagaRecord) {
 		case err == nil && reply.OK:
 			_ = c.store.SetState(ctx, rec.SagaID, StateCommitted, "")
 			c.requestConfirmation(ctx, rec)
-		case reply.Code == saga.CodeAlreadySubscribed:
+		case err == nil && reply.Code == saga.CodeAlreadySubscribed:
 			// A different holder of (email,repo) → compensate.
-			if relErr := c.parts.ReleaseRepo(ctx, rec.SubscriptionID); relErr == nil {
-				_ = c.store.SetState(ctx, rec.SagaID, StateCompensated, "recovered-dup")
+			if relErr := c.parts.ReleaseRepo(ctx, rec.SubscriptionID); relErr != nil {
+				slog.ErrorContext(ctx, "recover: compensation ReleaseRepo failed", "saga", rec.SagaID, "err", relErr)
+				return
 			}
+			_ = c.store.SetState(ctx, rec.SagaID, StateCompensated, "recovered-dup")
+		default:
+			// Transport error or an unresolved participant failure: leave the saga
+			// in SUBSCRIPTION_PENDING for the next sweep, but surface it so a
+			// persistent failure here cannot retry invisibly.
+			slog.ErrorContext(ctx, "recover: subscription.create unresolved, will retry next sweep",
+				"saga", rec.SagaID, "code", reply.Code, "err", err)
 		}
 	case StateCommitted:
 		c.requestConfirmation(ctx, rec)

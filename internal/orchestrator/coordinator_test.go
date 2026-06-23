@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -149,4 +150,20 @@ func TestRecover_SubPending_RollsForward(t *testing.T) {
 
 	require.NoError(t, h.coord.Recover(context.Background()))
 	require.Equal(t, orchestrator.StateDone, h.store.last())
+}
+
+func TestRecover_SubPending_UnresolvedCreate_StaysPending(t *testing.T) {
+	h := newHarness(t)
+	h.store.unfinished = []orchestrator.SagaRecord{{
+		SagaID: "saga-1", State: orchestrator.StateSubPending, SubscriptionID: "sub-1",
+		Payload: orchestrator.SagaPayload{Email: "a@b.com", Repo: "o/r", ConfirmToken: "c", UnsubToken: "u"},
+	}}
+	// A transport error (or any non-OK, non-duplicate reply) must not silently
+	// abandon the saga: no compensation, no confirmation, no terminal transition —
+	// it is left for the next sweep.
+	h.parts.EXPECT().CreateSubscription(gomock.Any(), gomock.Any()).
+		Return(saga.Reply{}, errors.New("nats timeout"))
+
+	require.NoError(t, h.coord.Recover(context.Background()))
+	require.Empty(t, h.store.states, "unresolved create must leave the saga pending, not transitioned")
 }

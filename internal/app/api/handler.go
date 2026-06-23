@@ -10,7 +10,6 @@ import (
 )
 
 type Service interface {
-	Subscribe(ctx context.Context, req domain.SubscribeRequest) error
 	ConfirmSubscription(ctx context.Context, token string) error
 	Unsubscribe(ctx context.Context, token string) error
 	GetSubscriptions(ctx context.Context, email string) ([]domain.SubscriptionResponse, error)
@@ -22,26 +21,6 @@ type Handler struct {
 
 func NewHandler(service Service) *Handler {
 	return &Handler{service: service}
-}
-
-func (h *Handler) Subscribe(c *gin.Context) {
-	var req domain.SubscribeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(
-			http.StatusBadRequest,
-			domain.ErrorResponse{Error: "invalid input: email and repo are required"},
-		)
-		return
-	}
-
-	if err := h.service.Subscribe(c.Request.Context(), req); err != nil {
-		writeError(c, "subscribe", err)
-		return
-	}
-	c.JSON(
-		http.StatusOK,
-		domain.MessageResponse{Message: "subscription successful, confirmation email sent"},
-	)
 }
 
 func (h *Handler) Unsubscribe(c *gin.Context) {

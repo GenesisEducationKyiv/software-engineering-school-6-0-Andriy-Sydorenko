@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -27,102 +26,18 @@ func newTestRouter(t *testing.T) (*gin.Engine, *mocks.MockService) {
 	h := NewHandler(svc)
 
 	r := gin.New()
-	r.POST("/api/subscribe", h.Subscribe)
 	r.GET("/api/confirm/:token", h.ConfirmSubscription)
 	r.GET("/api/unsubscribe/:token", h.Unsubscribe)
 	r.GET("/api/subscriptions", h.GetSubscriptions)
 	return r, svc
 }
 
-func doJSON(t *testing.T, r *gin.Engine, method, path string, body any) *httptest.ResponseRecorder {
+func doGET(t *testing.T, r *gin.Engine, path string) *httptest.ResponseRecorder {
 	t.Helper()
-	var buf bytes.Buffer
-	if body != nil {
-		require.NoError(t, json.NewEncoder(&buf).Encode(body))
-	}
-	req := httptest.NewRequest(method, path, &buf)
-	req.Header.Set("Content-Type", "application/json")
+	req := httptest.NewRequest(http.MethodGet, path, http.NoBody)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
-}
-
-func TestSubscribe(t *testing.T) {
-	t.Run(
-		"200 happy path", func(t *testing.T) {
-			r, svc := newTestRouter(t)
-			svc.EXPECT().Subscribe(
-				gomock.Any(),
-				domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"},
-			).Return(nil)
-
-			w := doJSON(
-				t,
-				r,
-				http.MethodPost,
-				"/api/subscribe",
-				domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"},
-			)
-			assert.Equal(t, http.StatusOK, w.Code)
-		},
-	)
-
-	t.Run(
-		"400 missing email — no service call", func(t *testing.T) {
-			// Binding rejects at the handler boundary; svc must not be called.
-			r, _ := newTestRouter(t)
-			w := doJSON(
-				t,
-				r,
-				http.MethodPost,
-				"/api/subscribe",
-				map[string]string{"repo": "golang/go"},
-			)
-			assert.Equal(t, http.StatusBadRequest, w.Code)
-		},
-	)
-
-	t.Run(
-		"400 invalid email — no service call", func(t *testing.T) {
-			r, _ := newTestRouter(t)
-			w := doJSON(
-				t,
-				r,
-				http.MethodPost,
-				"/api/subscribe",
-				map[string]string{"email": "not-email", "repo": "golang/go"},
-			)
-			assert.Equal(t, http.StatusBadRequest, w.Code)
-		},
-	)
-
-	cases := []struct {
-		name       string
-		svcErr     error
-		wantStatus int
-	}{
-		{"400 invalid repo format", domain.ErrInvalidRepoFormat, http.StatusBadRequest},
-		{"404 repo not on github", domain.ErrRepoNotFound, http.StatusNotFound},
-		{"409 already subscribed", domain.ErrAlreadySubscribed, http.StatusConflict},
-		{"503 github rate limited", domain.ErrRateLimited, http.StatusServiceUnavailable},
-	}
-	for _, tc := range cases {
-		t.Run(
-			tc.name, func(t *testing.T) {
-				r, svc := newTestRouter(t)
-				svc.EXPECT().Subscribe(gomock.Any(), gomock.Any()).Return(tc.svcErr)
-
-				w := doJSON(
-					t,
-					r,
-					http.MethodPost,
-					"/api/subscribe",
-					domain.SubscribeRequest{Email: "a@b.com", Repo: "golang/go"},
-				)
-				assert.Equal(t, tc.wantStatus, w.Code)
-			},
-		)
-	}
 }
 
 func TestConfirm(t *testing.T) {
@@ -131,7 +46,7 @@ func TestConfirm(t *testing.T) {
 			r, svc := newTestRouter(t)
 			svc.EXPECT().ConfirmSubscription(gomock.Any(), "abc").Return(nil)
 
-			w := doJSON(t, r, http.MethodGet, "/api/confirm/abc", nil)
+			w := doGET(t, r, "/api/confirm/abc")
 			assert.Equal(t, http.StatusOK, w.Code)
 		},
 	)
@@ -144,7 +59,7 @@ func TestConfirm(t *testing.T) {
 				"missing",
 			).Return(domain.ErrTokenNotFound)
 
-			w := doJSON(t, r, http.MethodGet, "/api/confirm/missing", nil)
+			w := doGET(t, r, "/api/confirm/missing")
 			assert.Equal(t, http.StatusNotFound, w.Code)
 		},
 	)
@@ -157,7 +72,7 @@ func TestUnsubscribe(t *testing.T) {
 			r, svc := newTestRouter(t)
 			svc.EXPECT().Unsubscribe(gomock.Any(), "tok").Return(nil)
 
-			w := doJSON(t, r, http.MethodGet, "/api/unsubscribe/tok", nil)
+			w := doGET(t, r, "/api/unsubscribe/tok")
 			assert.Equal(t, http.StatusOK, w.Code)
 		},
 	)
@@ -167,7 +82,7 @@ func TestUnsubscribe(t *testing.T) {
 			r, svc := newTestRouter(t)
 			svc.EXPECT().Unsubscribe(gomock.Any(), gomock.Any()).Return(domain.ErrTokenNotFound)
 
-			w := doJSON(t, r, http.MethodGet, "/api/unsubscribe/missing", nil)
+			w := doGET(t, r, "/api/unsubscribe/missing")
 			assert.Equal(t, http.StatusNotFound, w.Code)
 		},
 	)
@@ -183,7 +98,7 @@ func TestGetSubscriptions(t *testing.T) {
 				}, nil,
 			)
 
-			w := doJSON(t, r, http.MethodGet, "/api/subscriptions?email=a@b.com", nil)
+			w := doGET(t, r, "/api/subscriptions?email=a@b.com")
 			require.Equal(t, http.StatusOK, w.Code)
 
 			var got []domain.SubscriptionResponse
@@ -197,7 +112,7 @@ func TestGetSubscriptions(t *testing.T) {
 			r, svc := newTestRouter(t)
 			svc.EXPECT().GetSubscriptions(gomock.Any(), gomock.Any()).Return(nil, nil)
 
-			w := doJSON(t, r, http.MethodGet, "/api/subscriptions?email=nobody@b.com", nil)
+			w := doGET(t, r, "/api/subscriptions?email=nobody@b.com")
 			assert.Equal(t, http.StatusOK, w.Code)
 		},
 	)
@@ -210,7 +125,7 @@ func TestGetSubscriptions(t *testing.T) {
 				domain.ErrInvalidEmail,
 			)
 
-			w := doJSON(t, r, http.MethodGet, "/api/subscriptions?email=not-email", nil)
+			w := doGET(t, r, "/api/subscriptions?email=not-email")
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 		},
 	)

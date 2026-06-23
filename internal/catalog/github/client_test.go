@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
 )
 
 // newTestClient: real Client routed at httptest app via a host-rewriting transport.
@@ -78,7 +78,7 @@ func TestValidateRepoStatusMapping(t *testing.T) {
 		{
 			"404 not found",
 			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) },
-			domain.ErrRepoNotFound, "",
+			catalog.ErrRepoNotFound, "",
 		},
 		{
 			"500 unexpected",
@@ -126,7 +126,7 @@ func TestValidateRepoRateLimitDetection(t *testing.T) {
 			) {
 				w.WriteHeader(http.StatusTooManyRequests)
 			},
-			domain.ErrRateLimited, "",
+			catalog.ErrRateLimited, "",
 		},
 		{
 			"403 primary rate limit (remaining=0)",
@@ -134,7 +134,7 @@ func TestValidateRepoRateLimitDetection(t *testing.T) {
 				w.Header().Set("X-RateLimit-Remaining", "0")
 				w.WriteHeader(http.StatusForbidden)
 			},
-			domain.ErrRateLimited, "",
+			catalog.ErrRateLimited, "",
 		},
 		{
 			"403 secondary rate limit (Retry-After)",
@@ -142,7 +142,7 @@ func TestValidateRepoRateLimitDetection(t *testing.T) {
 				w.Header().Set("Retry-After", "60")
 				w.WriteHeader(http.StatusForbidden)
 			},
-			domain.ErrRateLimited, "",
+			catalog.ErrRateLimited, "",
 		},
 		{
 			"403 non-rate-limit (SAML required etc.)",
@@ -188,14 +188,14 @@ func TestGetLatestRelease(t *testing.T) {
 			"", nil,
 		},
 		{
-			"429 surfaces domain.ErrRateLimited",
+			"429 surfaces catalog.ErrRateLimited",
 			func(
 				w http.ResponseWriter,
 				_ *http.Request,
 			) {
 				w.WriteHeader(http.StatusTooManyRequests)
 			},
-			"", domain.ErrRateLimited,
+			"", catalog.ErrRateLimited,
 		},
 	}
 

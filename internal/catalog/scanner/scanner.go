@@ -8,16 +8,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
 )
 
 type Repository interface {
-	FindDistinctConfirmedRepos(ctx context.Context) ([]string, error)
-	FindConfirmedSubscriptionsByRepo(ctx context.Context, repo string) (
-		[]domain.Subscription,
-		error,
-	)
-	GetWatchedRepo(ctx context.Context, repo string) (*domain.WatchedRepo, error)
+	ActiveRepos(ctx context.Context) ([]string, error)
+	GetWatchedRepo(ctx context.Context, repo string) (*catalog.WatchedRepo, error)
 	SaveWatchedRepoTag(ctx context.Context, repo, tag string) error
 }
 
@@ -25,31 +21,33 @@ type ReleaseFetcher interface {
 	GetLatestRelease(ctx context.Context, owner, repo string) (string, error)
 }
 
-type ReleaseNotifier interface {
-	SendReleaseNotification(ctx context.Context, email, repo, tag, unsubscribeToken string) error
+// EventPublisher emits one release.detected per new release; the subscription
+// service (which owns the subscriber list) fans it out to recipients.
+type EventPublisher interface {
+	ReleaseDetected(ctx context.Context, repo, tag string) error
 }
 
 type Scanner struct {
-	repo     Repository
-	github   ReleaseFetcher
-	notifier ReleaseNotifier
-	pool     *WorkerPool
-	cfg      Config
+	repo   Repository
+	github ReleaseFetcher
+	events EventPublisher
+	pool   *WorkerPool
+	cfg    Config
 }
 
 func New(
 	repo Repository,
 	github ReleaseFetcher,
-	notifier ReleaseNotifier,
+	events EventPublisher,
 	cfg *Config,
 ) *Scanner {
 	cfg.withDefaults()
 	return &Scanner{
-		repo:     repo,
-		github:   github,
-		notifier: notifier,
-		pool:     NewWorkerPool(cfg.Concurrency),
-		cfg:      *cfg,
+		repo:   repo,
+		github: github,
+		events: events,
+		pool:   NewWorkerPool(cfg.Concurrency),
+		cfg:    *cfg,
 	}
 }
 
@@ -93,7 +91,7 @@ func (s *Scanner) Run(ctx context.Context) {
 }
 
 func (s *Scanner) runOnce(ctx context.Context) {
-	repos, err := s.repo.FindDistinctConfirmedRepos(ctx)
+	repos, err := s.repo.ActiveRepos(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "scanner: failed to list repos", "err", err)
 		return
@@ -109,7 +107,7 @@ func (s *Scanner) runOnce(ctx context.Context) {
 				return
 			}
 			if err := s.safeCheckRepo(ctx, repo); err != nil {
-				if errors.Is(err, domain.ErrRateLimited) {
+				if errors.Is(err, catalog.ErrRateLimited) {
 					if rateLimitHit.CompareAndSwap(false, true) {
 						slog.WarnContext(ctx, "scanner: GitHub rate limit hit, aborting cycle")
 					}
@@ -137,7 +135,7 @@ func (s *Scanner) safeCheckRepo(ctx context.Context, repo string) (err error) {
 func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 	parts := strings.SplitN(repo, "/", 2)
 	if len(parts) != 2 {
-		return domain.ErrInvalidRepoFormat
+		return catalog.ErrInvalidRepoFormat
 	}
 
 	// Per-call deadline is enforced by the GitHub client.
@@ -161,13 +159,8 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		return s.repo.SaveWatchedRepoTag(ctx, repo, tag)
 	}
 
-	subs, err := s.repo.FindConfirmedSubscriptionsByRepo(ctx, repo)
-	if err != nil {
-		return err
-	}
-
-	// Advance the cursor before notifying: a failed persist re-fires next scan
-	// (no missed release) rather than letting a successful notify re-send.
+	// Advance the cursor before publishing: a failed persist re-fires next scan
+	// (no missed release) rather than letting a successful publish re-fan-out.
 	if err := s.repo.SaveWatchedRepoTag(ctx, repo, tag); err != nil {
 		slog.ErrorContext(
 			ctx, "scanner: failed to save watched repo tag",
@@ -178,28 +171,13 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		return nil
 	}
 
-	for i := range subs {
-		sub := &subs[i]
-		// Per-call deadline so a stalled NATS publish can't pin a worker slot.
-		sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := s.notifier.SendReleaseNotification(
-			sendCtx,
-			sub.Email,
-			sub.Repo,
-			tag,
-			sub.UnsubscribeToken,
+	if err := s.events.ReleaseDetected(ctx, repo, tag); err != nil {
+		slog.ErrorContext(
+			ctx, "scanner: failed to publish release.detected",
+			"repo", repo,
+			"tag", tag,
+			"err", err,
 		)
-		cancel()
-		if err != nil {
-			// sub.ID is logged in place of sub.Email — email is PII
-			slog.ErrorContext(
-				ctx, "scanner: failed to send release notification",
-				"id", sub.ID,
-				"repo", repo,
-				"tag", tag,
-				"err", err,
-			)
-		}
 	}
 
 	return nil

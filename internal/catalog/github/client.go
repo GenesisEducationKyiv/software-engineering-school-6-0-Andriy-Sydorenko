@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
 )
 
 const defaultBaseURL = "https://api.github.com"
@@ -56,10 +56,10 @@ func (g *Client) ValidateRepo(ctx context.Context, owner, repo string) error {
 	case http.StatusOK:
 		return nil
 	case http.StatusNotFound:
-		return domain.ErrRepoNotFound
+		return catalog.ErrRepoNotFound
 	case http.StatusForbidden, http.StatusTooManyRequests:
 		if isRateLimited(resp) {
-			return domain.ErrRateLimited
+			return catalog.ErrRateLimited
 		}
 		return fmt.Errorf("GitHub API forbidden (not rate-limit): %d", resp.StatusCode)
 	default:
@@ -95,7 +95,7 @@ func (g *Client) GetLatestRelease(ctx context.Context, owner, repo string) (stri
 		return "", nil
 	case http.StatusForbidden, http.StatusTooManyRequests:
 		if isRateLimited(resp) {
-			return "", domain.ErrRateLimited
+			return "", catalog.ErrRateLimited
 		}
 		return "", fmt.Errorf("GitHub API forbidden (not rate-limit): %d", resp.StatusCode)
 	default:

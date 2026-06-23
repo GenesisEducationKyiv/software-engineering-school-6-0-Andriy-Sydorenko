@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/saga"
 )
 
@@ -64,6 +65,17 @@ func (h *Handler) Release(ctx context.Context, data []byte) (any, error) {
 		return nil, err
 	}
 	return saga.Reply{OK: true}, nil
+}
+
+// OnSubscriptionRemoved is the events.subscription.removed handler: drop the
+// registration so the scanner stops polling a repo the unsubscriber left.
+// Idempotent; a malformed payload is permanent (drop, don't retry).
+func (h *Handler) OnSubscriptionRemoved(ctx context.Context, _ string, data []byte) error {
+	var evt saga.SubscriptionRemovedEvent
+	if err := json.Unmarshal(data, &evt); err != nil {
+		return fmt.Errorf("%w: unmarshal subscription.removed: %w", natsbus.ErrPermanent, err)
+	}
+	return h.store.Release(ctx, evt.SubscriptionID)
 }
 
 func splitRepo(s string) (owner, name string, ok bool) {

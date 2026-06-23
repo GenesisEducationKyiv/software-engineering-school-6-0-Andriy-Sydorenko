@@ -1,7 +1,7 @@
 //go:build integration
 
-// Package integration exercises the full HTTP → service → repository
-// → Postgres path. The Postgres container is started once per package
+// Package integration exercises the subscription service's HTTP → service →
+// repository → Postgres path. The Postgres container is started once per package
 // run; the schema is reset between tests via TRUNCATE.
 package integration
 
@@ -32,76 +32,17 @@ var (
 	sharedDBErr  error
 )
 
-// stubGitHub is the test's GitHub boundary. Tests flip wantErr to
-// drive 404/503 paths through the real service+repo wiring.
-type stubGitHub struct {
-	mu      sync.Mutex
-	wantErr error
-	calls   int
-}
+// noopEvents is a no-op service.EventPublisher — the unsubscribe cleanup event
+// is covered by the saga integration tests, not the HTTP API tests.
+type noopEvents struct{}
 
-func (s *stubGitHub) ValidateRepo(_ context.Context, _, _ string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.calls++
-	return s.wantErr
-}
+func (noopEvents) SubscriptionRemoved(context.Context, string, string) error { return nil }
 
-func (s *stubGitHub) setErr(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.wantErr = err
-}
-
-func (s *stubGitHub) callCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.calls
-}
-
-// stubMailer records every confirmation send so tests can assert on
-// what the service handed off, without opening an SMTP connection.
-type stubMailer struct {
-	mu    sync.Mutex
-	sends []sentMail
-	err   error
-}
-
-type sentMail struct {
-	email      string
-	repo       string
-	token      string
-	unsubToken string
-}
-
-func (m *stubMailer) SendConfirmation(
-	_ context.Context,
-	email, repo, token, unsubToken string,
-) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.err != nil {
-		return m.err
-	}
-	m.sends = append(m.sends, sentMail{email, repo, token, unsubToken})
-	return nil
-}
-
-func (m *stubMailer) snapshot() []sentMail {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]sentMail, len(m.sends))
-	copy(out, m.sends)
-	return out
-}
-
-// testEnv bundles the per-test handles: a fresh router with fresh
-// stubs, the shared DB (rows truncated), and the stubs for assertions.
+// testEnv bundles the per-test handles: a fresh router and the shared DB
+// (rows truncated between tests).
 type testEnv struct {
 	router *gin.Engine
 	db     *gorm.DB
-	github *stubGitHub
-	mailer *stubMailer
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -109,18 +50,11 @@ func newTestEnv(t *testing.T) *testEnv {
 	db := mustSharedDB(t)
 	truncateAll(t, db)
 
-	gh := &stubGitHub{}
-	mailer := &stubMailer{}
 	repo := repository.New(db)
-	svc := service.New(repo, repo, gh, mailer, service.RandomToken)
+	svc := service.New(repo, repo, noopEvents{})
 	router := api.NewRouter(api.NewHandler(svc), testAPIKey)
 
-	return &testEnv{
-		router: router,
-		db:     db,
-		github: gh,
-		mailer: mailer,
-	}
+	return &testEnv{router: router, db: db}
 }
 
 func mustSharedDB(t *testing.T) *gorm.DB {
@@ -159,9 +93,6 @@ func startPostgres() (*gorm.DB, error) {
 		return nil, fmt.Errorf("dsn: %w", err)
 	}
 
-	// Wait for the DB to actually accept queries — BasicWaitStrategies
-	// returns once logs say "ready" but a fresh container occasionally
-	// still rejects the first connection.
 	db, err := openWithRetry(dsn, 30, 500*time.Millisecond)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
@@ -198,7 +129,7 @@ func openWithRetry(dsn string, attempts int, delay time.Duration) (*gorm.DB, err
 
 func truncateAll(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	if err := db.Exec(`TRUNCATE TABLE confirmation_tokens, subscriptions, watched_repos RESTART IDENTITY CASCADE`).Error; err != nil {
+	if err := db.Exec(`TRUNCATE TABLE confirmation_tokens, subscriptions RESTART IDENTITY CASCADE`).Error; err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }

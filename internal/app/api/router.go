@@ -32,7 +32,6 @@ func registerRoutes(router *gin.Engine, h *Handler, apiKey string) {
 		protected := apiGroup.Group("")
 		protected.Use(APIKeyAuth(apiKey))
 		{
-			protected.POST("/subscribe", h.Subscribe)
 			protected.GET("/subscriptions", h.GetSubscriptions)
 		}
 	}

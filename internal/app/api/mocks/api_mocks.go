@@ -70,20 +70,6 @@ func (mr *MockServiceMockRecorder) GetSubscriptions(ctx, email any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSubscriptions", reflect.TypeOf((*MockService)(nil).GetSubscriptions), ctx, email)
 }
 
-// Subscribe mocks base method.
-func (m *MockService) Subscribe(ctx context.Context, req domain.SubscribeRequest) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Subscribe", ctx, req)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Subscribe indicates an expected call of Subscribe.
-func (mr *MockServiceMockRecorder) Subscribe(ctx, req any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Subscribe", reflect.TypeOf((*MockService)(nil).Subscribe), ctx, req)
-}
-
 // Unsubscribe mocks base method.
 func (m *MockService) Unsubscribe(ctx context.Context, token string) error {
 	m.ctrl.T.Helper()

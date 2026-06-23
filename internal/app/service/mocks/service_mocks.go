@@ -55,20 +55,6 @@ func (mr *MockSubscriptionRepoMockRecorder) ConfirmSubscription(ctx, id any) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfirmSubscription", reflect.TypeOf((*MockSubscriptionRepo)(nil).ConfirmSubscription), ctx, id)
 }
 
-// CreateSubscriptionWithToken mocks base method.
-func (m *MockSubscriptionRepo) CreateSubscriptionWithToken(ctx context.Context, sub *domain.Subscription, token *domain.ConfirmationToken) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateSubscriptionWithToken", ctx, sub, token)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// CreateSubscriptionWithToken indicates an expected call of CreateSubscriptionWithToken.
-func (mr *MockSubscriptionRepoMockRecorder) CreateSubscriptionWithToken(ctx, sub, token any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateSubscriptionWithToken", reflect.TypeOf((*MockSubscriptionRepo)(nil).CreateSubscriptionWithToken), ctx, sub, token)
-}
-
 // DeleteSubscription mocks base method.
 func (m *MockSubscriptionRepo) DeleteSubscription(ctx context.Context, id uint) error {
 	m.ctrl.T.Helper()
@@ -81,21 +67,6 @@ func (m *MockSubscriptionRepo) DeleteSubscription(ctx context.Context, id uint) 
 func (mr *MockSubscriptionRepoMockRecorder) DeleteSubscription(ctx, id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteSubscription", reflect.TypeOf((*MockSubscriptionRepo)(nil).DeleteSubscription), ctx, id)
-}
-
-// FindSubscriptionByEmailAndRepo mocks base method.
-func (m *MockSubscriptionRepo) FindSubscriptionByEmailAndRepo(ctx context.Context, email, repo string) (*domain.Subscription, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindSubscriptionByEmailAndRepo", ctx, email, repo)
-	ret0, _ := ret[0].(*domain.Subscription)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// FindSubscriptionByEmailAndRepo indicates an expected call of FindSubscriptionByEmailAndRepo.
-func (mr *MockSubscriptionRepoMockRecorder) FindSubscriptionByEmailAndRepo(ctx, email, repo any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindSubscriptionByEmailAndRepo", reflect.TypeOf((*MockSubscriptionRepo)(nil).FindSubscriptionByEmailAndRepo), ctx, email, repo)
 }
 
 // FindSubscriptionByUnsubscribeToken mocks base method.
@@ -181,78 +152,40 @@ func (mr *MockTokenRepoMockRecorder) FindTokenByValue(ctx, tokenValue any) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindTokenByValue", reflect.TypeOf((*MockTokenRepo)(nil).FindTokenByValue), ctx, tokenValue)
 }
 
-// MockRepoValidator is a mock of RepoValidator interface.
-type MockRepoValidator struct {
+// MockEventPublisher is a mock of EventPublisher interface.
+type MockEventPublisher struct {
 	ctrl     *gomock.Controller
-	recorder *MockRepoValidatorMockRecorder
+	recorder *MockEventPublisherMockRecorder
 	isgomock struct{}
 }
 
-// MockRepoValidatorMockRecorder is the mock recorder for MockRepoValidator.
-type MockRepoValidatorMockRecorder struct {
-	mock *MockRepoValidator
+// MockEventPublisherMockRecorder is the mock recorder for MockEventPublisher.
+type MockEventPublisherMockRecorder struct {
+	mock *MockEventPublisher
 }
 
-// NewMockRepoValidator creates a new mock instance.
-func NewMockRepoValidator(ctrl *gomock.Controller) *MockRepoValidator {
-	mock := &MockRepoValidator{ctrl: ctrl}
-	mock.recorder = &MockRepoValidatorMockRecorder{mock}
+// NewMockEventPublisher creates a new mock instance.
+func NewMockEventPublisher(ctrl *gomock.Controller) *MockEventPublisher {
+	mock := &MockEventPublisher{ctrl: ctrl}
+	mock.recorder = &MockEventPublisherMockRecorder{mock}
 	return mock
 }
 
 // EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockRepoValidator) EXPECT() *MockRepoValidatorMockRecorder {
+func (m *MockEventPublisher) EXPECT() *MockEventPublisherMockRecorder {
 	return m.recorder
 }
 
-// ValidateRepo mocks base method.
-func (m *MockRepoValidator) ValidateRepo(ctx context.Context, owner, repo string) error {
+// SubscriptionRemoved mocks base method.
+func (m *MockEventPublisher) SubscriptionRemoved(ctx context.Context, subscriptionID, repo string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ValidateRepo", ctx, owner, repo)
+	ret := m.ctrl.Call(m, "SubscriptionRemoved", ctx, subscriptionID, repo)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// ValidateRepo indicates an expected call of ValidateRepo.
-func (mr *MockRepoValidatorMockRecorder) ValidateRepo(ctx, owner, repo any) *gomock.Call {
+// SubscriptionRemoved indicates an expected call of SubscriptionRemoved.
+func (mr *MockEventPublisherMockRecorder) SubscriptionRemoved(ctx, subscriptionID, repo any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ValidateRepo", reflect.TypeOf((*MockRepoValidator)(nil).ValidateRepo), ctx, owner, repo)
-}
-
-// MockConfirmationSender is a mock of ConfirmationSender interface.
-type MockConfirmationSender struct {
-	ctrl     *gomock.Controller
-	recorder *MockConfirmationSenderMockRecorder
-	isgomock struct{}
-}
-
-// MockConfirmationSenderMockRecorder is the mock recorder for MockConfirmationSender.
-type MockConfirmationSenderMockRecorder struct {
-	mock *MockConfirmationSender
-}
-
-// NewMockConfirmationSender creates a new mock instance.
-func NewMockConfirmationSender(ctrl *gomock.Controller) *MockConfirmationSender {
-	mock := &MockConfirmationSender{ctrl: ctrl}
-	mock.recorder = &MockConfirmationSenderMockRecorder{mock}
-	return mock
-}
-
-// EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockConfirmationSender) EXPECT() *MockConfirmationSenderMockRecorder {
-	return m.recorder
-}
-
-// SendConfirmation mocks base method.
-func (m *MockConfirmationSender) SendConfirmation(ctx context.Context, email, repo, token, unsubscribeToken string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SendConfirmation", ctx, email, repo, token, unsubscribeToken)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// SendConfirmation indicates an expected call of SendConfirmation.
-func (mr *MockConfirmationSenderMockRecorder) SendConfirmation(ctx, email, repo, token, unsubscribeToken any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SendConfirmation", reflect.TypeOf((*MockConfirmationSender)(nil).SendConfirmation), ctx, email, repo, token, unsubscribeToken)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubscriptionRemoved", reflect.TypeOf((*MockEventPublisher)(nil).SubscriptionRemoved), ctx, subscriptionID, repo)
 }

@@ -5,7 +5,8 @@ import (
 	"errors"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
 )
@@ -18,22 +19,49 @@ func New(db *gorm.DB) *Repository {
 	return &Repository{db: db}
 }
 
-// CreateSubscriptionWithToken writes both rows in one transaction so
-// they can't split-fail.
-func (r *Repository) CreateSubscriptionWithToken(
+// CreateForSaga inserts the subscription + token in one transaction (the saga
+// pivot). On an (email,repo) conflict it reports already=true, and mine=true when
+// the existing row is this saga's own retry (same public_id) — making recovery
+// re-issues idempotent — versus a genuine duplicate (mine=false).
+func (r *Repository) CreateForSaga(
 	ctx context.Context,
 	sub *domain.Subscription,
 	token *domain.ConfirmationToken,
-) error {
-	return r.db.WithContext(ctx).Transaction(
+) (already, mine bool, err error) {
+	err = r.db.WithContext(ctx).Transaction(
 		func(tx *gorm.DB) error {
-			if err := tx.Create(sub).Error; err != nil {
-				return err
+			createErr := tx.Create(sub).Error
+			if createErr == nil {
+				token.SubscriptionID = sub.ID
+				return tx.Create(token).Error
 			}
-			token.SubscriptionID = sub.ID
-			return tx.Create(token).Error
+			if !isUniqueViolation(createErr) {
+				return createErr
+			}
+			var existing domain.Subscription
+			if qErr := tx.Where("email = ? AND repo = ?", sub.Email, sub.Repo).
+				First(&existing).Error; qErr != nil {
+				return qErr
+			}
+			already = true
+			mine = existing.PublicID == sub.PublicID
+			return nil
 		},
 	)
+	return already, mine, err
+}
+
+// DeleteByPublicID removes a subscription by its cross-service id (the cancel
+// compensation). A missing row is a no-op, so it's idempotent.
+func (r *Repository) DeleteByPublicID(ctx context.Context, publicID string) error {
+	return r.db.WithContext(ctx).
+		Where("public_id = ?", publicID).
+		Delete(&domain.Subscription{}).Error
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func (r *Repository) FindSubscriptionByEmailAndRepo(
@@ -105,16 +133,6 @@ func (r *Repository) DeleteToken(ctx context.Context, id uint) error {
 	return r.db.WithContext(ctx).Delete(&domain.ConfirmationToken{}, id).Error
 }
 
-func (r *Repository) FindDistinctConfirmedRepos(ctx context.Context) ([]string, error) {
-	var repos []string
-	err := r.db.WithContext(ctx).
-		Model(&domain.Subscription{}).
-		Where("confirmed = ?", true).
-		Distinct("repo").
-		Pluck("repo", &repos).Error
-	return repos, err
-}
-
 func (r *Repository) FindConfirmedSubscriptionsByRepo(
 	ctx context.Context,
 	repo string,
@@ -124,32 +142,4 @@ func (r *Repository) FindConfirmedSubscriptionsByRepo(
 		Where("repo = ? AND confirmed = ?", repo, true).
 		Find(&subs).Error
 	return subs, err
-}
-
-// GetWatchedRepo returns the repo's release cursor, or nil if the repo has
-// never been scanned (caller treats nil as "first sighting").
-func (r *Repository) GetWatchedRepo(ctx context.Context, repo string) (*domain.WatchedRepo, error) {
-	var w domain.WatchedRepo
-	err := r.db.WithContext(ctx).
-		Where("repo = ?", repo).
-		First(&w).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	return &w, err
-}
-
-// SaveWatchedRepoTag upserts the repo's cursor: insert on first sighting, else
-// update the tag and stamp last_polled_at. Called on every poll (the tag is the
-// same on a no-change poll), so it doubles as the "we polled this repo" record.
-func (r *Repository) SaveWatchedRepoTag(ctx context.Context, repo, tag string) error {
-	return r.db.WithContext(ctx).
-		Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "repo"}},
-			DoUpdates: clause.Assignments(map[string]any{
-				"last_seen_tag":  tag,
-				"last_polled_at": gorm.Expr("now()"),
-			}),
-		}).
-		Create(&domain.WatchedRepo{Repo: repo, LastSeenTag: tag}).Error
 }

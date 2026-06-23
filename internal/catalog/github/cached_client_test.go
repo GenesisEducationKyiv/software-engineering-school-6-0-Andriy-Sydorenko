@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/cache"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/github/mocks"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/cache"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/github/mocks"
 )
 
 // newCachedClient wires a mock Store + real Client + httptest upstream; the returned int counts upstream hits.
@@ -76,7 +76,7 @@ func TestCachedValidateRepo_CachesNotFound(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		err := c.ValidateRepo(context.Background(), "owner", "repo")
-		require.ErrorIs(t, err, domain.ErrRepoNotFound)
+		require.ErrorIs(t, err, catalog.ErrRepoNotFound)
 	}
 	assert.Equal(t, 1, *upstreamCalls, "404s must be cached to avoid hammering GitHub")
 }

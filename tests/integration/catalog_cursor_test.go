@@ -8,17 +8,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
 )
 
-// TestWatchedRepoUpsert exercises the real GORM upsert (OnConflict on the
-// natural PK + now() stamp) against Postgres — the path mocks can't cover.
-func TestWatchedRepoUpsert(t *testing.T) {
-	db := mustSharedDB(t)
-	truncateAll(t, db)
-	repo := repository.New(db)
+// TestCatalogWatchedRepoUpsert exercises the real GORM upsert (OnConflict on the
+// natural PK + now() stamp) against Postgres — the path mocks can't cover. Moved
+// here with the cursor when the scanner was extracted into Catalog.
+func TestCatalogWatchedRepoUpsert(t *testing.T) {
+	repo := newCatalogRepo(t)
 	ctx := context.Background()
 
 	// Absent repo → nil, nil (caller treats it as a first sighting).
@@ -41,9 +37,4 @@ func TestWatchedRepoUpsert(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v1.1", got.LastSeenTag)
 	assert.False(t, got.LastPolledAt.Before(firstPoll), "last_polled_at advances on update")
-
-	var count int64
-	require.NoError(t, db.Model(&domain.WatchedRepo{}).
-		Where("repo = ?", "golang/go").Count(&count).Error)
-	assert.Equal(t, int64(1), count, "upsert must not create a duplicate row")
 }

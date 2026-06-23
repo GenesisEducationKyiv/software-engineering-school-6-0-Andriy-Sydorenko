@@ -10,6 +10,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notify"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/saga"
 )
 
 func Connect(url string) (*nats.Conn, jetstream.JetStream, error) {
@@ -53,6 +54,15 @@ func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
 		},
 	); err != nil {
 		return fmt.Errorf("ensure stream %s: %w", notify.DLQStreamName, err)
+	}
+	if _, err := js.CreateOrUpdateStream(
+		ctx, jetstream.StreamConfig{
+			Name:     saga.EventsStreamName,
+			Subjects: []string{saga.EventsStreamSubject},
+			Storage:  jetstream.FileStorage,
+		},
+	); err != nil {
+		return fmt.Errorf("ensure stream %s: %w", saga.EventsStreamName, err)
 	}
 	return nil
 }

@@ -5,8 +5,7 @@ import (
 	"errors"
 
 	"gorm.io/gorm"
-
-	"github.com/jackc/pgx/v5/pgconn"
+	"gorm.io/gorm/clause"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
 )
@@ -30,22 +29,27 @@ func (r *Repository) CreateForSaga(
 ) (already, mine bool, err error) {
 	err = r.db.WithContext(ctx).Transaction(
 		func(tx *gorm.DB) error {
-			createErr := tx.Create(sub).Error
-			if createErr == nil {
-				token.SubscriptionID = sub.ID
-				return tx.Create(token).Error
+			// ON CONFLICT (email,repo) DO NOTHING keeps the tx unpoisoned so we can
+			// inspect the existing row; a genuine INSERT error still propagates.
+			res := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "email"}, {Name: "repo"}},
+				DoNothing: true,
+			}).Create(sub)
+			if res.Error != nil {
+				return res.Error
 			}
-			if !isUniqueViolation(createErr) {
-				return createErr
+			if res.RowsAffected == 0 {
+				var existing domain.Subscription
+				if qErr := tx.Where("email = ? AND repo = ?", sub.Email, sub.Repo).
+					First(&existing).Error; qErr != nil {
+					return qErr
+				}
+				already = true
+				mine = existing.PublicID == sub.PublicID
+				return nil
 			}
-			var existing domain.Subscription
-			if qErr := tx.Where("email = ? AND repo = ?", sub.Email, sub.Repo).
-				First(&existing).Error; qErr != nil {
-				return qErr
-			}
-			already = true
-			mine = existing.PublicID == sub.PublicID
-			return nil
+			token.SubscriptionID = sub.ID
+			return tx.Create(token).Error
 		},
 	)
 	return already, mine, err
@@ -57,11 +61,6 @@ func (r *Repository) DeleteByPublicID(ctx context.Context, publicID string) erro
 	return r.db.WithContext(ctx).
 		Where("public_id = ?", publicID).
 		Delete(&domain.Subscription{}).Error
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func (r *Repository) FindSubscriptionByEmailAndRepo(

@@ -123,20 +123,6 @@ func (m *MockTokenRepo) EXPECT() *MockTokenRepoMockRecorder {
 	return m.recorder
 }
 
-// DeleteToken mocks base method.
-func (m *MockTokenRepo) DeleteToken(ctx context.Context, id uint) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteToken", ctx, id)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// DeleteToken indicates an expected call of DeleteToken.
-func (mr *MockTokenRepoMockRecorder) DeleteToken(ctx, id any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteToken", reflect.TypeOf((*MockTokenRepo)(nil).DeleteToken), ctx, id)
-}
-
 // FindTokenByValue mocks base method.
 func (m *MockTokenRepo) FindTokenByValue(ctx context.Context, tokenValue string) (*domain.ConfirmationToken, error) {
 	m.ctrl.T.Helper()

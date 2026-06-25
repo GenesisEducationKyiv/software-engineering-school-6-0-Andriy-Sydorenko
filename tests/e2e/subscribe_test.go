@@ -51,18 +51,26 @@ func (s *SubscribeSuite) TestLifecycle() {
 	s.Require().NotEmpty(mail.ConfirmToken, "confirm token not found in email")
 	s.Require().NotEmpty(mail.UnsubToken, "unsub token not found in email")
 
-	confirmResp, err := http.Get(s.H.AppURL + "/api/confirm/" + mail.ConfirmToken)
+	// Confirm/unsubscribe are HTML pages on the orchestrator now (same origin as the form).
+	confirmResp, err := http.Get(s.H.OrchestratorURL + "/confirm/" + mail.ConfirmToken)
 	s.Require().NoError(err)
 	confirmResp.Body.Close()
 	s.Require().Equal(http.StatusOK, confirmResp.StatusCode)
 
-	unsubResp, err := http.Get(s.H.AppURL + "/api/unsubscribe/" + mail.UnsubToken)
+	// Email providers prefetch links — the user's real click is often the *second* GET.
+	// Confirm must be idempotent: re-hitting the link still succeeds, not 404.
+	confirmAgain, err := http.Get(s.H.OrchestratorURL + "/confirm/" + mail.ConfirmToken)
+	s.Require().NoError(err)
+	confirmAgain.Body.Close()
+	s.Require().Equal(http.StatusOK, confirmAgain.StatusCode, "confirm must be idempotent (prefetch-safe)")
+
+	unsubResp, err := http.Get(s.H.OrchestratorURL + "/unsubscribe/" + mail.UnsubToken)
 	s.Require().NoError(err)
 	unsubResp.Body.Close()
 	s.Require().Equal(http.StatusOK, unsubResp.StatusCode)
 
 	// Token is one-shot — the state change is verified through behavior.
-	again, err := http.Get(s.H.AppURL + "/api/unsubscribe/" + mail.UnsubToken)
+	again, err := http.Get(s.H.OrchestratorURL + "/unsubscribe/" + mail.UnsubToken)
 	s.Require().NoError(err)
 	again.Body.Close()
 	s.Require().NotEqual(http.StatusOK, again.StatusCode, "unsub token should be one-shot")

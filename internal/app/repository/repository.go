@@ -18,10 +18,6 @@ func New(db *gorm.DB) *Repository {
 	return &Repository{db: db}
 }
 
-// CreateForSaga inserts the subscription + token in one transaction (the saga
-// pivot). On an (email,repo) conflict it reports already=true, and mine=true when
-// the existing row is this saga's own retry (same public_id) — making recovery
-// re-issues idempotent — versus a genuine duplicate (mine=false).
 func (r *Repository) CreateForSaga(
 	ctx context.Context,
 	sub *domain.Subscription,
@@ -29,12 +25,12 @@ func (r *Repository) CreateForSaga(
 ) (already, mine bool, err error) {
 	err = r.db.WithContext(ctx).Transaction(
 		func(tx *gorm.DB) error {
-			// ON CONFLICT (email,repo) DO NOTHING keeps the tx unpoisoned so we can
-			// inspect the existing row; a genuine INSERT error still propagates.
-			res := tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "email"}, {Name: "repo"}},
-				DoNothing: true,
-			}).Create(sub)
+			res := tx.Clauses(
+				clause.OnConflict{
+					Columns:   []clause.Column{{Name: "email"}, {Name: "repo"}},
+					DoNothing: true,
+				},
+			).Create(sub)
 			if res.Error != nil {
 				return res.Error
 			}
@@ -53,14 +49,6 @@ func (r *Repository) CreateForSaga(
 		},
 	)
 	return already, mine, err
-}
-
-// DeleteByPublicID removes a subscription by its cross-service id (the cancel
-// compensation). A missing row is a no-op, so it's idempotent.
-func (r *Repository) DeleteByPublicID(ctx context.Context, publicID string) error {
-	return r.db.WithContext(ctx).
-		Where("public_id = ?", publicID).
-		Delete(&domain.Subscription{}).Error
 }
 
 func (r *Repository) FindSubscriptionByEmailAndRepo(
@@ -126,10 +114,6 @@ func (r *Repository) FindTokenByValue(
 		return nil, nil
 	}
 	return &token, err
-}
-
-func (r *Repository) DeleteToken(ctx context.Context, id uint) error {
-	return r.db.WithContext(ctx).Delete(&domain.ConfirmationToken{}, id).Error
 }
 
 func (r *Repository) FindConfirmedSubscriptionsByRepo(

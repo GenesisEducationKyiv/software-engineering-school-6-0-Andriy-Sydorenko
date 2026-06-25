@@ -34,12 +34,12 @@ func newFixture(t *testing.T) *fixture {
 
 func TestConfirmSubscription(t *testing.T) {
 	t.Run(
-		"valid token confirms and deletes token", func(t *testing.T) {
+		"valid token confirms idempotently without consuming token", func(t *testing.T) {
+			// No DeleteToken: the link must survive prefetch so the user's real click also succeeds.
 			f := newFixture(t)
 			f.tokens.EXPECT().FindTokenByValue(gomock.Any(), "abc123").
 				Return(&domain.ConfirmationToken{ID: 7, SubscriptionID: 42}, nil)
 			f.repo.EXPECT().ConfirmSubscription(gomock.Any(), uint(42)).Return(nil)
-			f.tokens.EXPECT().DeleteToken(gomock.Any(), uint(7)).Return(nil)
 
 			require.NoError(t, f.svc.ConfirmSubscription(context.Background(), "abc123"))
 		},
@@ -77,8 +77,7 @@ func TestConfirmSubscription(t *testing.T) {
 	)
 
 	t.Run(
-		"confirm failure aborts before token delete", func(t *testing.T) {
-			// No DeleteToken EXPECT: must not delete the token if confirm failed.
+		"confirm failure propagates", func(t *testing.T) {
 			f := newFixture(t)
 			f.tokens.EXPECT().FindTokenByValue(gomock.Any(), gomock.Any()).
 				Return(&domain.ConfirmationToken{ID: 7, SubscriptionID: 42}, nil)
@@ -89,19 +88,6 @@ func TestConfirmSubscription(t *testing.T) {
 
 			err := f.svc.ConfirmSubscription(context.Background(), "tok")
 			require.Error(t, err)
-		},
-	)
-
-	t.Run(
-		"delete-token failure swallowed", func(t *testing.T) {
-			// Sub is confirmed; failing to delete the spent token is a log line, not a user error.
-			f := newFixture(t)
-			f.tokens.EXPECT().FindTokenByValue(gomock.Any(), gomock.Any()).
-				Return(&domain.ConfirmationToken{ID: 7, SubscriptionID: 42}, nil)
-			f.repo.EXPECT().ConfirmSubscription(gomock.Any(), uint(42)).Return(nil)
-			f.tokens.EXPECT().DeleteToken(gomock.Any(), uint(7)).Return(errors.New("delete failed"))
-
-			require.NoError(t, f.svc.ConfirmSubscription(context.Background(), "tok"))
 		},
 	)
 }

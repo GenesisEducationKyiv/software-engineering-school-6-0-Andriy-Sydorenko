@@ -22,7 +22,6 @@ type SubscriptionRepo interface {
 
 type TokenRepo interface {
 	FindTokenByValue(ctx context.Context, tokenValue string) (*domain.ConfirmationToken, error)
-	DeleteToken(ctx context.Context, id uint) error
 }
 
 // EventPublisher emits the cleanup event so Catalog releases the repo
@@ -54,16 +53,11 @@ func (s *Service) ConfirmSubscription(ctx context.Context, tokenValue string) er
 		return domain.ErrTokenNotFound
 	}
 
+	// Idempotent: don't consume the token. Email providers prefetch links, so the
+	// first GET is often a scanner, not the user — deleting here would 404 the real
+	// click. The token is cleaned up by the FK ON DELETE CASCADE on unsubscribe.
 	if err := s.subs.ConfirmSubscription(ctx, token.SubscriptionID); err != nil {
 		return fmt.Errorf("failed to confirm subscription id=%d: %w", token.SubscriptionID, err)
-	}
-
-	if err := s.tokens.DeleteToken(ctx, token.ID); err != nil {
-		slog.WarnContext(
-			ctx, "failed to delete used confirmation token",
-			"id", token.ID,
-			"err", err,
-		)
 	}
 
 	return nil

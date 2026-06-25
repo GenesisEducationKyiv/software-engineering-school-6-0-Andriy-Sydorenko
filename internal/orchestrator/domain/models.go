@@ -1,4 +1,4 @@
-package orchestrator
+package domain
 
 // State is a saga's position in its lifecycle. Terminal states (DONE, ABORTED,
 // COMPENSATED) are excluded from the recovery sweep.

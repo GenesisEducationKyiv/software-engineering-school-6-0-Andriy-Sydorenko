@@ -21,14 +21,11 @@ func registerRoutes(router *gin.Engine, h *Handler, apiKey string) {
 		},
 	)
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
-	router.GET("/", subscribePage)
 
+	// confirm/unsubscribe moved to the orchestrator's public pages; the subscription
+	// service handles them over NATS now (subscription.confirm / .unsubscribe).
 	apiGroup := router.Group("/api")
 	{
-		apiGroup.GET("/confirm/:token", h.ConfirmSubscription)
-		apiGroup.GET("/unsubscribe/:token", h.Unsubscribe)
-		apiGroup.POST("/unsubscribe/:token", h.Unsubscribe)
-
 		protected := apiGroup.Group("")
 		protected.Use(APIKeyAuth(apiKey))
 		{

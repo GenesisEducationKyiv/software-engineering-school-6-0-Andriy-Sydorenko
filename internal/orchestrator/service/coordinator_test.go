@@ -1,4 +1,4 @@
-package orchestrator_test
+package service_test
 
 import (
 	"context"
@@ -8,8 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/mocks"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/domain"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/service"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/service/mocks"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/saga"
 )
 
@@ -29,22 +30,22 @@ func (s *stubIDs) NewToken() string { v := s.tokens[s.j]; s.j++; return v }
 
 // recStore records state transitions so tests can assert the terminal state.
 type recStore struct {
-	states     []orchestrator.State
-	unfinished []orchestrator.SagaRecord
+	states     []domain.State
+	unfinished []domain.SagaRecord
 }
 
-func (s *recStore) Create(context.Context, *orchestrator.SagaRecord) error { return nil }
+func (s *recStore) Create(context.Context, *domain.SagaRecord) error { return nil }
 
-func (s *recStore) SetState(_ context.Context, _ string, st orchestrator.State, _ string) error {
+func (s *recStore) SetState(_ context.Context, _ string, st domain.State, _ string) error {
 	s.states = append(s.states, st)
 	return nil
 }
 
-func (s *recStore) FindUnfinished(context.Context) ([]orchestrator.SagaRecord, error) {
+func (s *recStore) FindUnfinished(context.Context) ([]domain.SagaRecord, error) {
 	return s.unfinished, nil
 }
 
-func (s *recStore) last() orchestrator.State {
+func (s *recStore) last() domain.State {
 	if len(s.states) == 0 {
 		return ""
 	}
@@ -55,7 +56,7 @@ type harness struct {
 	parts   *mocks.MockParticipants
 	confirm *mocks.MockConfirmationPublisher
 	store   *recStore
-	coord   *orchestrator.Coordinator
+	coord   *service.Coordinator
 }
 
 func newHarness(t *testing.T) *harness {
@@ -65,7 +66,7 @@ func newHarness(t *testing.T) *harness {
 		confirm: mocks.NewMockConfirmationPublisher(ctrl),
 		store:   &recStore{},
 	}
-	h.coord = orchestrator.NewCoordinator(h.parts, h.confirm, h.store, newStubIDs())
+	h.coord = service.NewCoordinator(h.parts, h.confirm, h.store, newStubIDs())
 	return h
 }
 
@@ -85,7 +86,7 @@ func TestSubscribe_HappyPath_CommitsThenRequestsConfirmation(t *testing.T) {
 	// ReleaseRepo must NOT be called — no EXPECT set.
 
 	require.NoError(t, h.coord.Subscribe(context.Background(), "a@b.com", "golang/go"))
-	require.Equal(t, orchestrator.StateDone, h.store.last())
+	require.Equal(t, domain.StateDone, h.store.last())
 }
 
 func TestSubscribe_BadRepo_Aborts_NoCreate_NoConfirmation(t *testing.T) {
@@ -95,8 +96,8 @@ func TestSubscribe_BadRepo_Aborts_NoCreate_NoConfirmation(t *testing.T) {
 	// CreateSubscription / ReleaseRepo / RequestConfirmation must NOT be called.
 
 	err := h.coord.Subscribe(context.Background(), "a@b.com", "golang/go")
-	require.ErrorIs(t, err, orchestrator.ErrRepoNotFound)
-	require.Equal(t, orchestrator.StateAborted, h.store.last())
+	require.ErrorIs(t, err, domain.ErrRepoNotFound)
+	require.Equal(t, domain.StateAborted, h.store.last())
 }
 
 func TestSubscribe_CreateFails_CompensatesRelease_NoConfirmation(t *testing.T) {
@@ -109,54 +110,54 @@ func TestSubscribe_CreateFails_CompensatesRelease_NoConfirmation(t *testing.T) {
 	// RequestConfirmation must NOT be called.
 
 	err := h.coord.Subscribe(context.Background(), "a@b.com", "golang/go")
-	require.ErrorIs(t, err, orchestrator.ErrAlreadySubscribed)
-	require.Equal(t, orchestrator.StateCompensated, h.store.last())
+	require.ErrorIs(t, err, domain.ErrAlreadySubscribed)
+	require.Equal(t, domain.StateCompensated, h.store.last())
 }
 
 func TestRecover_Committed_RepublishesConfirmationOnly(t *testing.T) {
 	h := newHarness(t)
-	h.store.unfinished = []orchestrator.SagaRecord{{
-		SagaID: "saga-1", State: orchestrator.StateCommitted, SubscriptionID: "sub-1",
-		Payload: orchestrator.SagaPayload{Email: "a@b.com", Repo: "o/r", ConfirmToken: "c", UnsubToken: "u"},
+	h.store.unfinished = []domain.SagaRecord{{
+		SagaID: "saga-1", State: domain.StateCommitted, SubscriptionID: "sub-1",
+		Payload: domain.SagaPayload{Email: "a@b.com", Repo: "o/r", ConfirmToken: "c", UnsubToken: "u"},
 	}}
 	h.confirm.EXPECT().RequestConfirmation(gomock.Any(), "a@b.com", "o/r", "c", "u").Return(nil)
 	// ReleaseRepo / CreateSubscription must NOT be called.
 
 	require.NoError(t, h.coord.Recover(context.Background()))
-	require.Equal(t, orchestrator.StateDone, h.store.last())
+	require.Equal(t, domain.StateDone, h.store.last())
 }
 
 func TestRecover_CatalogOK_Compensates(t *testing.T) {
 	h := newHarness(t)
-	h.store.unfinished = []orchestrator.SagaRecord{{
-		SagaID: "saga-1", State: orchestrator.StateCatalogOK, SubscriptionID: "sub-1",
-		Payload: orchestrator.SagaPayload{Email: "a@b.com", Repo: "o/r"},
+	h.store.unfinished = []domain.SagaRecord{{
+		SagaID: "saga-1", State: domain.StateCatalogOK, SubscriptionID: "sub-1",
+		Payload: domain.SagaPayload{Email: "a@b.com", Repo: "o/r"},
 	}}
 	h.parts.EXPECT().ReleaseRepo(gomock.Any(), "sub-1").Return(nil)
 	// RequestConfirmation must NOT be called.
 
 	require.NoError(t, h.coord.Recover(context.Background()))
-	require.Equal(t, orchestrator.StateCompensated, h.store.last())
+	require.Equal(t, domain.StateCompensated, h.store.last())
 }
 
 func TestRecover_SubPending_RollsForward(t *testing.T) {
 	h := newHarness(t)
-	h.store.unfinished = []orchestrator.SagaRecord{{
-		SagaID: "saga-1", State: orchestrator.StateSubPending, SubscriptionID: "sub-1",
-		Payload: orchestrator.SagaPayload{Email: "a@b.com", Repo: "o/r", ConfirmToken: "c", UnsubToken: "u"},
+	h.store.unfinished = []domain.SagaRecord{{
+		SagaID: "saga-1", State: domain.StateSubPending, SubscriptionID: "sub-1",
+		Payload: domain.SagaPayload{Email: "a@b.com", Repo: "o/r", ConfirmToken: "c", UnsubToken: "u"},
 	}}
 	h.parts.EXPECT().CreateSubscription(gomock.Any(), gomock.Any()).Return(saga.Reply{OK: true}, nil)
 	h.confirm.EXPECT().RequestConfirmation(gomock.Any(), "a@b.com", "o/r", "c", "u").Return(nil)
 
 	require.NoError(t, h.coord.Recover(context.Background()))
-	require.Equal(t, orchestrator.StateDone, h.store.last())
+	require.Equal(t, domain.StateDone, h.store.last())
 }
 
 func TestRecover_SubPending_UnresolvedCreate_StaysPending(t *testing.T) {
 	h := newHarness(t)
-	h.store.unfinished = []orchestrator.SagaRecord{{
-		SagaID: "saga-1", State: orchestrator.StateSubPending, SubscriptionID: "sub-1",
-		Payload: orchestrator.SagaPayload{Email: "a@b.com", Repo: "o/r", ConfirmToken: "c", UnsubToken: "u"},
+	h.store.unfinished = []domain.SagaRecord{{
+		SagaID: "saga-1", State: domain.StateSubPending, SubscriptionID: "sub-1",
+		Payload: domain.SagaPayload{Email: "a@b.com", Repo: "o/r", ConfirmToken: "c", UnsubToken: "u"},
 	}}
 	// A transport error (or any non-OK, non-duplicate reply) must not silently
 	// abandon the saga: no compensation, no confirmation, no terminal transition —

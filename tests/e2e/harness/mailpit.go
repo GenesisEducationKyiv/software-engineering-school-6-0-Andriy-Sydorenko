@@ -24,8 +24,8 @@ type CapturedMail struct {
 }
 
 var (
-	confirmTokenRE = regexp.MustCompile(`/api/confirm/([A-Za-z0-9_\-]+)`)
-	unsubTokenRE   = regexp.MustCompile(`/api/unsubscribe/([A-Za-z0-9_\-]+)`)
+	confirmTokenRE = regexp.MustCompile(`/confirm/([A-Za-z0-9_\-]+)`)
+	unsubTokenRE   = regexp.MustCompile(`/unsubscribe/([A-Za-z0-9_\-]+)`)
 )
 
 // WaitForMail polls Mailpit until at least one message addressed to toAddr is

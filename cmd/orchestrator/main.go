@@ -14,8 +14,9 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/api"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/repository"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/service"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/config"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/logging"
@@ -98,12 +99,13 @@ func run() error {
 		return fmt.Errorf("ensure streams: %w", err)
 	}
 
-	coord := orchestrator.NewCoordinator(
-		orchestrator.NewNATSParticipants(nc, cfg.RequestTimeout),
-		orchestrator.NewNATSConfirmationPublisher(js),
+	coord := service.NewCoordinator(
+		service.NewNATSParticipants(nc, cfg.RequestTimeout),
+		service.NewNATSConfirmationPublisher(js),
 		repository.New(db),
-		orchestrator.UUIDGen{},
+		service.UUIDGen{},
 	)
+	subsClient := service.NewSubscriptionClient(nc, cfg.RequestTimeout)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -113,7 +115,7 @@ func run() error {
 	}
 	go runRecoveryLoop(ctx, coord, cfg.RecoverInterval)
 
-	router := orchestrator.NewRouter(orchestrator.NewHTTPHandler(coord))
+	router := api.NewRouter(api.NewHTTPHandler(coord, subsClient))
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%s", cfg.Port),
 		Handler:      router,
@@ -138,7 +140,7 @@ func run() error {
 	return nil
 }
 
-func runRecoveryLoop(ctx context.Context, coord *orchestrator.Coordinator, interval time.Duration) {
+func runRecoveryLoop(ctx context.Context, coord *service.Coordinator, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -153,7 +155,7 @@ func runRecoveryLoop(ctx context.Context, coord *orchestrator.Coordinator, inter
 
 // runSweep runs one recovery pass, recovering from a panic so one bad saga never
 // kills the recovery loop for the process lifetime.
-func runSweep(ctx context.Context, coord *orchestrator.Coordinator) {
+func runSweep(ctx context.Context, coord *service.Coordinator) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.ErrorContext(ctx, "recovery sweep panicked", "panic", r)

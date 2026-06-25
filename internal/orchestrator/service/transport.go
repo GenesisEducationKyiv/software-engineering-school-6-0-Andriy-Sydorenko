@@ -1,4 +1,4 @@
-package orchestrator
+package service
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/domain"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/saga"
 )
@@ -28,9 +29,9 @@ type ConfirmationPublisher interface {
 
 // SagaStore persists the saga log for forward/backward recovery.
 type SagaStore interface {
-	Create(ctx context.Context, rec *SagaRecord) error
-	SetState(ctx context.Context, sagaID string, state State, lastErr string) error
-	FindUnfinished(ctx context.Context) ([]SagaRecord, error)
+	Create(ctx context.Context, rec *domain.SagaRecord) error
+	SetState(ctx context.Context, sagaID string, state domain.State, lastErr string) error
+	FindUnfinished(ctx context.Context) ([]domain.SagaRecord, error)
 }
 
 // IDGen mints saga ids, the cross-service subscription id, and email tokens.

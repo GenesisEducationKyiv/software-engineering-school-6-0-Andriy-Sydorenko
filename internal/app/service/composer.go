@@ -32,7 +32,7 @@ func NewComposer(baseURL string) *Composer {
 }
 
 func (c *Composer) Confirmation(email, repo, token, unsubscribeToken string) (Message, error) {
-	confirmURL := fmt.Sprintf("%s/api/confirm/%s", c.baseURL, token)
+	confirmURL := fmt.Sprintf("%s/confirm/%s", c.baseURL, token)
 	unsubscribeURL := c.unsubscribeURL(unsubscribeToken)
 
 	plain := fmt.Sprintf(
@@ -96,7 +96,7 @@ func (c *Composer) Release(email, repo, tag, unsubscribeToken string) (Message, 
 }
 
 func (c *Composer) unsubscribeURL(token string) string {
-	return fmt.Sprintf("%s/api/unsubscribe/%s", c.baseURL, token)
+	return fmt.Sprintf("%s/unsubscribe/%s", c.baseURL, token)
 }
 
 func unsubscribeHeaders(url string) map[string]string {

@@ -43,13 +43,18 @@ func (c *Consumer) Handle(ctx context.Context, _ string, data []byte) error {
 		return fmt.Errorf("load subscribers for %s: %w", evt.Repo, err)
 	}
 
-	// Each per-recipient publish is independently retried/deduped downstream by
-	// JetStream; a single failure is logged, not fatal to the batch.
+	var failed int
 	for i := range subs {
 		sub := &subs[i]
 		if err := c.notifier.SendReleaseNotification(ctx, sub.Email, evt.Repo, evt.Tag, sub.UnsubscribeToken); err != nil {
 			slog.ErrorContext(ctx, "release fan-out publish failed", "id", sub.ID, "repo", evt.Repo, "tag", evt.Tag, "err", err)
+			failed++
 		}
+	}
+	if failed > 0 {
+		// Nak so failed recipients retry on redelivery; already-sent ones dedup on
+		// (repo,tag,email), so no double-send and no silent drop.
+		return fmt.Errorf("release fan-out: %d/%d recipients failed for %s@%s", failed, len(subs), evt.Tag, evt.Repo)
 	}
 	return nil
 }

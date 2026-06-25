@@ -32,11 +32,12 @@ import (
 	apprepo "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
 	appsaga "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/saga"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
 	catalogrepo "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/repository"
+	catalogsaga "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/saga"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator"
+	orchapi "github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/api"
 	orchestratorrepo "github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/repository"
+	orchservice "github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/service"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/saga"
 
@@ -117,16 +118,18 @@ func New(t *testing.T, _ ...Options) *Harness {
 	h.AppURL, h.OrchestratorURL = appURL, orchURL
 
 	catCleanup := h.wireCatalog(t, nc, js, catalogrepo.New(catDB), githubClient)
-	appRouter := h.wireSubscription(t, nc, js, apprepo.New(subDB), appURL)
-	coord := orchestrator.NewCoordinator(
-		orchestrator.NewNATSParticipants(nc, 5*time.Second),
-		orchestrator.NewNATSConfirmationPublisher(js),
+	// Email links point at the orchestrator (it serves the confirm/unsubscribe pages).
+	appRouter := h.wireSubscription(t, nc, js, apprepo.New(subDB), orchURL)
+	coord := orchservice.NewCoordinator(
+		orchservice.NewNATSParticipants(nc, 5*time.Second),
+		orchservice.NewNATSConfirmationPublisher(js),
 		orchestratorrepo.New(orchDB),
-		orchestrator.UUIDGen{},
+		orchservice.UUIDGen{},
 	)
+	subsClient := orchservice.NewSubscriptionClient(nc, 5*time.Second)
 
 	appSrv.Handler = appRouter
-	orchSrv.Handler = orchestrator.NewRouter(orchestrator.NewHTTPHandler(coord))
+	orchSrv.Handler = orchapi.NewRouter(orchapi.NewHTTPHandler(coord, subsClient))
 	serve(appSrv, appListener)
 	serve(orchSrv, orchListener)
 
@@ -147,9 +150,9 @@ func New(t *testing.T, _ ...Options) *Harness {
 
 // wireCatalog registers the catalog saga handlers + the subscription.removed
 // cleanup consumer. Returns a cleanup for the consumer.
-func (h *Harness) wireCatalog(t *testing.T, nc *nats.Conn, js jetstream.JetStream, repo *catalogrepo.Repository, gh catalog.RepoValidator) func() {
+func (h *Harness) wireCatalog(t *testing.T, nc *nats.Conn, js jetstream.JetStream, repo *catalogrepo.Repository, gh catalogsaga.RepoValidator) func() {
 	t.Helper()
-	handler := catalog.NewHandler(repo, gh)
+	handler := catalogsaga.NewHandler(repo, gh)
 	_, err := natsbus.RespondJSON(nc, saga.SubjCatalogRegister, saga.QueueCatalog, handler.Register)
 	require.NoError(t, err)
 	_, err = natsbus.RespondJSON(nc, saga.SubjCatalogRelease, saga.QueueCatalog, handler.Release)
@@ -162,17 +165,21 @@ func (h *Harness) wireCatalog(t *testing.T, nc *nats.Conn, js jetstream.JetStrea
 	return removed.Stop
 }
 
-// wireSubscription registers the subscription saga handlers + release/confirmation
-// consumers and returns the HTTP router (confirm/unsubscribe/list).
-func (h *Harness) wireSubscription(t *testing.T, nc *nats.Conn, js jetstream.JetStream, repo *apprepo.Repository, appURL string) *gin.Engine {
+// wireSubscription registers the subscription service's NATS handlers (create +
+// confirm/unsubscribe commands, release/confirmation consumers) and returns its
+// HTTP router (the list endpoint). baseURL is where email links point.
+func (h *Harness) wireSubscription(t *testing.T, nc *nats.Conn, js jetstream.JetStream, repo *apprepo.Repository, baseURL string) *gin.Engine {
 	t.Helper()
-	emailNotifier := service.NewEmailNotifier(appURL, natspublisher.New(js))
+	emailNotifier := service.NewEmailNotifier(baseURL, natspublisher.New(js))
 	svc := service.New(repo, repo, appeventpublisher.New(js))
 	sagaHandler := appsaga.NewHandler(repo)
+	cmdHandler := appsaga.NewCommandHandler(svc)
 
 	_, err := natsbus.RespondJSON(nc, saga.SubjSubscriptionCreate, saga.QueueSubscription, sagaHandler.Create)
 	require.NoError(t, err)
-	_, err = natsbus.RespondJSON(nc, saga.SubjSubscriptionCancel, saga.QueueSubscription, sagaHandler.Cancel)
+	_, err = natsbus.RespondJSON(nc, saga.SubjSubscriptionConfirm, saga.QueueSubscription, cmdHandler.Confirm)
+	require.NoError(t, err)
+	_, err = natsbus.RespondJSON(nc, saga.SubjSubscriptionUnsubscribe, saga.QueueSubscription, cmdHandler.Unsubscribe)
 	require.NoError(t, err)
 
 	rel := releaseconsumer.New(repo, emailNotifier)

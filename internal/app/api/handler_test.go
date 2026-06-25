@@ -26,8 +26,6 @@ func newTestRouter(t *testing.T) (*gin.Engine, *mocks.MockService) {
 	h := NewHandler(svc)
 
 	r := gin.New()
-	r.GET("/api/confirm/:token", h.ConfirmSubscription)
-	r.GET("/api/unsubscribe/:token", h.Unsubscribe)
 	r.GET("/api/subscriptions", h.GetSubscriptions)
 	return r, svc
 }
@@ -38,54 +36,6 @@ func doGET(t *testing.T, r *gin.Engine, path string) *httptest.ResponseRecorder 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
-}
-
-func TestConfirm(t *testing.T) {
-	t.Run(
-		"200 valid token", func(t *testing.T) {
-			r, svc := newTestRouter(t)
-			svc.EXPECT().ConfirmSubscription(gomock.Any(), "abc").Return(nil)
-
-			w := doGET(t, r, "/api/confirm/abc")
-			assert.Equal(t, http.StatusOK, w.Code)
-		},
-	)
-
-	t.Run(
-		"404 token not found", func(t *testing.T) {
-			r, svc := newTestRouter(t)
-			svc.EXPECT().ConfirmSubscription(
-				gomock.Any(),
-				"missing",
-			).Return(domain.ErrTokenNotFound)
-
-			w := doGET(t, r, "/api/confirm/missing")
-			assert.Equal(t, http.StatusNotFound, w.Code)
-		},
-	)
-}
-
-func TestUnsubscribe(t *testing.T) {
-	t.Run(
-		"200 valid token passes through", func(t *testing.T) {
-			// Exact-match arg: path param forwarded verbatim.
-			r, svc := newTestRouter(t)
-			svc.EXPECT().Unsubscribe(gomock.Any(), "tok").Return(nil)
-
-			w := doGET(t, r, "/api/unsubscribe/tok")
-			assert.Equal(t, http.StatusOK, w.Code)
-		},
-	)
-
-	t.Run(
-		"404 token not found", func(t *testing.T) {
-			r, svc := newTestRouter(t)
-			svc.EXPECT().Unsubscribe(gomock.Any(), gomock.Any()).Return(domain.ErrTokenNotFound)
-
-			w := doGET(t, r, "/api/unsubscribe/missing")
-			assert.Equal(t, http.StatusNotFound, w.Code)
-		},
-	)
 }
 
 func TestGetSubscriptions(t *testing.T) {

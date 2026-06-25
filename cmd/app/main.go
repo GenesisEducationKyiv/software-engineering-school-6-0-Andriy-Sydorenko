@@ -66,14 +66,15 @@ func loadCfg() (*Config, error) {
 		return nil, err
 	}
 
+	port := config.GetEnvOrDefault("PORT", "8080")
 	cfg := &Config{
 		DB:           dbCfg,
 		Log:          logCfg,
-		Port:         config.GetEnvOrDefault("PORT", "8080"),
+		Port:         port,
 		ReadTimeout:  config.GetEnvDuration("READ_TIMEOUT", 10*time.Second),
 		WriteTimeout: config.GetEnvDuration("WRITE_TIMEOUT", 10*time.Second),
 		APIKey:       config.GetEnvOrDefault("API_KEY", ""),
-		BaseURL:      config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
+		BaseURL:      config.GetEnvOrDefault("BASE_URL", "http://localhost:8090"),
 		NATSURL:      config.GetEnvOrDefault("NATS_URL", "nats://localhost:4222"),
 		MaxDeliver:   config.GetEnvInt("CONSUMER_MAX_DELIVER", 5),
 		AckWait:      config.GetEnvDuration("CONSUMER_ACK_WAIT", 30*time.Second),
@@ -116,13 +117,23 @@ func run() error {
 	emailNotifier := service.NewEmailNotifier(cfg.BaseURL, natspublisher.New(js))
 	svc := service.New(repo, repo, eventpublisher.New(js))
 	sagaHandler := appsaga.NewHandler(repo)
+	cmdHandler := appsaga.NewCommandHandler(svc)
 	relConsumer := releaseconsumer.New(repo, emailNotifier)
 	confConsumer := confirmationconsumer.New(emailNotifier)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	stopConsumers, err := startConsumers(ctx, nc, js, sagaHandler, relConsumer, confConsumer, cfg)
+	stopConsumers, err := startConsumers(
+		ctx,
+		nc,
+		js,
+		sagaHandler,
+		cmdHandler,
+		relConsumer,
+		confConsumer,
+		cfg,
+	)
 	if err != nil {
 		return err
 	}
@@ -153,26 +164,45 @@ func run() error {
 	return nil
 }
 
-// startConsumers wires the subscription.create/cancel saga handlers (request-reply)
-// and the release.detected fan-out consumer, returning a single cleanup func.
+// startConsumers wires the subscription.create saga handler (request-reply) and
+// the release.detected + confirmation.requested consumers, returning one cleanup func.
 func startConsumers(
 	ctx context.Context,
 	nc *nats.Conn,
 	js jetstream.JetStream,
 	h *appsaga.Handler,
+	cmd *appsaga.CommandHandler,
 	rc *releaseconsumer.Consumer,
 	cc *confirmationconsumer.Consumer,
 	cfg *Config,
 ) (func(), error) {
-	createSub, err := natsbus.RespondJSON(nc, saga.SubjSubscriptionCreate, saga.QueueSubscription, h.Create)
-	if err != nil {
-		return nil, fmt.Errorf("subscribe %s: %w", saga.SubjSubscriptionCreate, err)
+	var replies []*nats.Subscription
+	respond := func(subject string, fn natsbus.HandlerFunc) error {
+		sub, err := natsbus.RespondJSON(nc, subject, saga.QueueSubscription, fn)
+		if err != nil {
+			return fmt.Errorf("subscribe %s: %w", subject, err)
+		}
+		replies = append(replies, sub)
+		return nil
 	}
-	cancelSub, err := natsbus.RespondJSON(nc, saga.SubjSubscriptionCancel, saga.QueueSubscription, h.Cancel)
-	if err != nil {
-		_ = createSub.Unsubscribe()
-		return nil, fmt.Errorf("subscribe %s: %w", saga.SubjSubscriptionCancel, err)
+	unsubReplies := func() {
+		for _, s := range replies {
+			_ = s.Unsubscribe()
+		}
 	}
+
+	if err := respond(saga.SubjSubscriptionCreate, h.Create); err != nil {
+		return nil, err
+	}
+	if err := respond(saga.SubjSubscriptionConfirm, cmd.Confirm); err != nil {
+		unsubReplies()
+		return nil, err
+	}
+	if err := respond(saga.SubjSubscriptionUnsubscribe, cmd.Unsubscribe); err != nil {
+		unsubReplies()
+		return nil, err
+	}
+
 	release, err := natsbus.Consume(
 		ctx, js, natsbus.ConsumerConfig{
 			Stream:        saga.EventsStreamName,
@@ -183,8 +213,7 @@ func startConsumers(
 		}, rc.Handle,
 	)
 	if err != nil {
-		_ = createSub.Unsubscribe()
-		_ = cancelSub.Unsubscribe()
+		unsubReplies()
 		return nil, fmt.Errorf("consume %s: %w", saga.SubjReleaseDetected, err)
 	}
 	confirmation, err := natsbus.Consume(
@@ -197,14 +226,12 @@ func startConsumers(
 		}, cc.Handle,
 	)
 	if err != nil {
-		_ = createSub.Unsubscribe()
-		_ = cancelSub.Unsubscribe()
+		unsubReplies()
 		release.Stop()
 		return nil, fmt.Errorf("consume %s: %w", saga.SubjConfirmationRequested, err)
 	}
 	return func() {
-		_ = createSub.Unsubscribe()
-		_ = cancelSub.Unsubscribe()
+		unsubReplies()
 		release.Stop()
 		confirmation.Stop()
 	}, nil

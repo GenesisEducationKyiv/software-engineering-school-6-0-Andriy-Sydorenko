@@ -8,12 +8,11 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/domain"
 )
 
 type sagaLogRow struct {
 	SagaID         string `gorm:"column:saga_id;primaryKey;type:uuid"`
-	Type           string `gorm:"column:type"`
 	State          string `gorm:"column:state"`
 	SubscriptionID string `gorm:"column:subscription_id;type:uuid"`
 	Payload        []byte `gorm:"column:payload;type:jsonb"`
@@ -32,14 +31,13 @@ func New(db *gorm.DB) *Repository {
 	return &Repository{db: db}
 }
 
-func (r *Repository) Create(ctx context.Context, rec *orchestrator.SagaRecord) error {
+func (r *Repository) Create(ctx context.Context, rec *domain.SagaRecord) error {
 	payload, err := json.Marshal(rec.Payload)
 	if err != nil {
 		return fmt.Errorf("marshal saga payload: %w", err)
 	}
 	row := sagaLogRow{
 		SagaID:         rec.SagaID,
-		Type:           "subscribe",
 		State:          string(rec.State),
 		SubscriptionID: rec.SubscriptionID,
 		Payload:        payload,
@@ -47,7 +45,7 @@ func (r *Repository) Create(ctx context.Context, rec *orchestrator.SagaRecord) e
 	return r.db.WithContext(ctx).Create(&row).Error
 }
 
-func (r *Repository) SetState(ctx context.Context, sagaID string, state orchestrator.State, lastErr string) error {
+func (r *Repository) SetState(ctx context.Context, sagaID string, state domain.State, lastErr string) error {
 	return r.db.WithContext(ctx).
 		Model(&sagaLogRow{}).
 		Where("saga_id = ?", sagaID).
@@ -58,29 +56,30 @@ func (r *Repository) SetState(ctx context.Context, sagaID string, state orchestr
 		}).Error
 }
 
-// FindUnfinished returns sagas the recovery sweep must resume.
-func (r *Repository) FindUnfinished(ctx context.Context) ([]orchestrator.SagaRecord, error) {
+// FindUnfinished returns sagas the recovery sweep must resume. Unbounded — fine at
+// this scale (partial index); add a LIMIT + cursor if a backlog ever forms.
+func (r *Repository) FindUnfinished(ctx context.Context) ([]domain.SagaRecord, error) {
 	var rows []sagaLogRow
 	err := r.db.WithContext(ctx).
 		Where("state NOT IN ?", []string{
-			string(orchestrator.StateDone),
-			string(orchestrator.StateAborted),
-			string(orchestrator.StateCompensated),
+			string(domain.StateDone),
+			string(domain.StateAborted),
+			string(domain.StateCompensated),
 		}).
 		Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
 
-	recs := make([]orchestrator.SagaRecord, 0, len(rows))
+	recs := make([]domain.SagaRecord, 0, len(rows))
 	for i := range rows {
-		var payload orchestrator.SagaPayload
+		var payload domain.SagaPayload
 		if err := json.Unmarshal(rows[i].Payload, &payload); err != nil {
 			return nil, fmt.Errorf("unmarshal saga %s payload: %w", rows[i].SagaID, err)
 		}
-		recs = append(recs, orchestrator.SagaRecord{
+		recs = append(recs, domain.SagaRecord{
 			SagaID:         rows[i].SagaID,
-			State:          orchestrator.State(rows[i].State),
+			State:          domain.State(rows[i].State),
 			SubscriptionID: rows[i].SubscriptionID,
 			Payload:        payload,
 		})

@@ -1,4 +1,4 @@
-package orchestrator
+package service
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/domain"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/saga"
 )
 
@@ -31,11 +32,11 @@ func (UUIDGen) NewToken() string { return uuid.NewString() }
 // create (pivot) → confirmation (terminal). On a pre-pivot failure it compensates;
 // after the pivot it only rolls forward.
 func (c *Coordinator) Subscribe(ctx context.Context, email, repo string) error {
-	rec := SagaRecord{
+	rec := domain.SagaRecord{
 		SagaID:         c.ids.NewID(),
-		State:          StateStarted,
+		State:          domain.StateStarted,
 		SubscriptionID: c.ids.NewID(),
-		Payload: SagaPayload{
+		Payload: domain.SagaPayload{
 			Email:        email,
 			Repo:         repo,
 			ConfirmToken: c.ids.NewToken(),
@@ -43,47 +44,47 @@ func (c *Coordinator) Subscribe(ctx context.Context, email, repo string) error {
 		},
 	}
 	if err := c.store.Create(ctx, &rec); err != nil {
-		return errors.Join(ErrInternal, err)
+		return errors.Join(domain.ErrInternal, err)
 	}
 
 	// Step A — register the repo (risky GitHub validation, fail-fast, compensatable).
 	reply, err := c.parts.RegisterRepo(ctx, rec.SagaID, rec.SubscriptionID, repo)
 	if err != nil || !reply.OK {
-		_ = c.store.SetState(ctx, rec.SagaID, StateAborted, codeOf(reply, err))
+		_ = c.store.SetState(ctx, rec.SagaID, domain.StateAborted, codeOf(reply, err))
 		return outcomeErr(reply, err)
 	}
-	_ = c.store.SetState(ctx, rec.SagaID, StateCatalogOK, "")
+	_ = c.store.SetState(ctx, rec.SagaID, domain.StateCatalogOK, "")
 
 	// Step B — create the subscription (pivot).
-	_ = c.store.SetState(ctx, rec.SagaID, StateSubPending, "")
+	_ = c.store.SetState(ctx, rec.SagaID, domain.StateSubPending, "")
 	cmd := c.createCmd(&rec)
 	createReply, err := c.parts.CreateSubscription(ctx, &cmd)
 	if err != nil || !createReply.OK {
-		_ = c.store.SetState(ctx, rec.SagaID, StateCompensating, codeOf(createReply, err))
+		_ = c.store.SetState(ctx, rec.SagaID, domain.StateCompensating, codeOf(createReply, err))
 		if relErr := c.parts.ReleaseRepo(ctx, rec.SubscriptionID); relErr != nil {
 			slog.ErrorContext(ctx, "saga: compensation ReleaseRepo failed", "saga", rec.SagaID, "err", relErr)
 		}
-		_ = c.store.SetState(ctx, rec.SagaID, StateCompensated, codeOf(createReply, err))
+		_ = c.store.SetState(ctx, rec.SagaID, domain.StateCompensated, codeOf(createReply, err))
 		return outcomeErr(createReply, err)
 	}
-	_ = c.store.SetState(ctx, rec.SagaID, StateCommitted, "")
+	_ = c.store.SetState(ctx, rec.SagaID, domain.StateCommitted, "")
 
 	// Step C — terminal: request the confirmation email (only after COMMITTED).
 	c.requestConfirmation(ctx, &rec)
 	return nil
 }
 
-func (c *Coordinator) requestConfirmation(ctx context.Context, rec *SagaRecord) {
+func (c *Coordinator) requestConfirmation(ctx context.Context, rec *domain.SagaRecord) {
 	if err := c.confirm.RequestConfirmation(
 		ctx, rec.Payload.Email, rec.Payload.Repo, rec.Payload.ConfirmToken, rec.Payload.UnsubToken,
 	); err != nil {
 		slog.ErrorContext(ctx, "saga: confirmation request failed; recovery will retry", "saga", rec.SagaID, "err", err)
 		return
 	}
-	_ = c.store.SetState(ctx, rec.SagaID, StateDone, "")
+	_ = c.store.SetState(ctx, rec.SagaID, domain.StateDone, "")
 }
 
-func (c *Coordinator) createCmd(rec *SagaRecord) saga.CreateSubscriptionCommand {
+func (c *Coordinator) createCmd(rec *domain.SagaRecord) saga.CreateSubscriptionCommand {
 	return saga.CreateSubscriptionCommand{
 		SagaID:         rec.SagaID,
 		SubscriptionID: rec.SubscriptionID,
@@ -107,22 +108,22 @@ func (c *Coordinator) Recover(ctx context.Context) error {
 	return nil
 }
 
-func (c *Coordinator) recoverOne(ctx context.Context, rec *SagaRecord) {
+func (c *Coordinator) recoverOne(ctx context.Context, rec *domain.SagaRecord) {
 	switch rec.State {
-	case StateStarted, StateCatalogOK, StateCompensating:
+	case domain.StateStarted, domain.StateCatalogOK, domain.StateCompensating:
 		// Pivot not confirmed → roll back.
 		if err := c.parts.ReleaseRepo(ctx, rec.SubscriptionID); err != nil {
 			slog.ErrorContext(ctx, "recover: ReleaseRepo failed", "saga", rec.SagaID, "err", err)
 			return
 		}
-		_ = c.store.SetState(ctx, rec.SagaID, StateCompensated, "recovered")
-	case StateSubPending:
+		_ = c.store.SetState(ctx, rec.SagaID, domain.StateCompensated, "recovered")
+	case domain.StateSubPending:
 		// Create may or may not have landed → roll forward idempotently.
 		cmd := c.createCmd(rec)
 		reply, err := c.parts.CreateSubscription(ctx, &cmd)
 		switch {
 		case err == nil && reply.OK:
-			_ = c.store.SetState(ctx, rec.SagaID, StateCommitted, "")
+			_ = c.store.SetState(ctx, rec.SagaID, domain.StateCommitted, "")
 			c.requestConfirmation(ctx, rec)
 		case err == nil && reply.Code == saga.CodeAlreadySubscribed:
 			// A different holder of (email,repo) → compensate.
@@ -130,15 +131,13 @@ func (c *Coordinator) recoverOne(ctx context.Context, rec *SagaRecord) {
 				slog.ErrorContext(ctx, "recover: compensation ReleaseRepo failed", "saga", rec.SagaID, "err", relErr)
 				return
 			}
-			_ = c.store.SetState(ctx, rec.SagaID, StateCompensated, "recovered-dup")
+			_ = c.store.SetState(ctx, rec.SagaID, domain.StateCompensated, "recovered-dup")
 		default:
-			// Transport error or an unresolved participant failure: leave the saga
-			// in SUBSCRIPTION_PENDING for the next sweep, but surface it so a
-			// persistent failure here cannot retry invisibly.
+			// Unresolved (transport error or non-dup failure): log and leave it for the next sweep.
 			slog.ErrorContext(ctx, "recover: subscription.create unresolved, will retry next sweep",
 				"saga", rec.SagaID, "code", reply.Code, "err", err)
 		}
-	case StateCommitted:
+	case domain.StateCommitted:
 		c.requestConfirmation(ctx, rec)
 	}
 }
@@ -153,16 +152,16 @@ func codeOf(reply saga.Reply, err error) string {
 // outcomeErr maps a participant reply/transport error to a saga-outcome error.
 func outcomeErr(reply saga.Reply, err error) error {
 	if err != nil {
-		return errors.Join(ErrInternal, err)
+		return errors.Join(domain.ErrInternal, err)
 	}
 	switch reply.Code {
 	case saga.CodeRepoNotFound:
-		return ErrRepoNotFound
+		return domain.ErrRepoNotFound
 	case saga.CodeRateLimited:
-		return ErrRateLimited
+		return domain.ErrRateLimited
 	case saga.CodeAlreadySubscribed:
-		return ErrAlreadySubscribed
+		return domain.ErrAlreadySubscribed
 	default:
-		return ErrInternal
+		return domain.ErrInternal
 	}
 }

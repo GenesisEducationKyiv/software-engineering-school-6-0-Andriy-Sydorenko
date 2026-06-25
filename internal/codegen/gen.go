@@ -12,8 +12,8 @@ package codegen
 //go:generate go tool mockgen -source=../app/api/handler.go          -destination=../app/api/mocks/api_mocks.go         -package=mocks
 //go:generate go tool mockgen -source=../catalog/github/cached_client.go -destination=../catalog/github/mocks/github_mocks.go   -package=mocks
 //go:generate go tool mockgen -source=../catalog/scanner/scanner.go      -destination=../catalog/scanner/mocks/scanner_mocks.go -package=mocks
-//go:generate go tool mockgen -source=../orchestrator/transport.go       -destination=../orchestrator/mocks/orchestrator_mocks.go    -package=mocks
+//go:generate go tool mockgen -source=../orchestrator/service/transport.go -destination=../orchestrator/service/mocks/service_mocks.go -package=mocks
 //go:generate go tool mockgen -source=../app/service/service.go        -destination=../app/service/mocks/service_mocks.go         -package=mocks
 //go:generate go tool mockgen -source=../app/service/email_notifier.go -destination=../app/service/mocks/email_notifier_mocks.go -package=mocks
 //go:generate go tool mockgen -source=../notifier/mailer.go            -destination=../notifier/mocks/notifier_mocks.go            -package=mocks
-//go:generate go tool mockgen -source=../catalog/handler.go            -destination=../catalog/mocks/catalog_mocks.go              -package=mocks
+//go:generate go tool mockgen -source=../catalog/saga/handler.go       -destination=../catalog/saga/mocks/saga_mocks.go            -package=mocks

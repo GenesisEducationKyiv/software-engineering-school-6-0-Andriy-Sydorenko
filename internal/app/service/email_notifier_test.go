@@ -28,7 +28,7 @@ func TestSendConfirmationPublishesRenderedCommand(t *testing.T) {
 		if !strings.Contains(cmd.Subject, "golang/go") {
 			t.Fatalf("subject=%q", cmd.Subject)
 		}
-		if !strings.Contains(cmd.HTMLBody, "/api/confirm/ctok") {
+		if !strings.Contains(cmd.HTMLBody, "/confirm/ctok") {
 			t.Fatalf("html missing confirm url: %q", cmd.HTMLBody)
 		}
 		if cmd.EventID == "" {

@@ -19,8 +19,8 @@ func TestComposerConfirmation(t *testing.T) {
 	assert.Equal(t, "user@example.com", msg.To)
 	assert.Contains(t, msg.Subject, "golang/go")
 
-	confirmURL := testBaseURL + "/api/confirm/ctoken"
-	unsubURL := testBaseURL + "/api/unsubscribe/utoken"
+	confirmURL := testBaseURL + "/confirm/ctoken"
+	unsubURL := testBaseURL + "/unsubscribe/utoken"
 
 	assert.Contains(t, msg.PlainBody, confirmURL)
 	assert.Contains(t, msg.PlainBody, unsubURL)
@@ -49,7 +49,7 @@ func TestComposerRelease(t *testing.T) {
 	assert.Contains(t, msg.PlainBody, releaseURL)
 	assert.Contains(t, msg.HTMLBody, releaseURL)
 
-	assertUnsubHeaders(t, msg.Headers, testBaseURL+"/api/unsubscribe/utoken")
+	assertUnsubHeaders(t, msg.Headers, testBaseURL+"/unsubscribe/utoken")
 }
 
 func TestBreakAutoLink(t *testing.T) {

@@ -5,7 +5,11 @@ const (
 	SubjCatalogRegister    = "saga.catalog.register"
 	SubjCatalogRelease     = "saga.catalog.release"
 	SubjSubscriptionCreate = "saga.subscription.create"
-	SubjSubscriptionCancel = "saga.subscription.cancel"
+
+	// Direct subscription commands the orchestrator's confirm/unsubscribe pages
+	// issue (request-reply; not saga steps — nothing to compensate).
+	SubjSubscriptionConfirm     = "subscription.confirm"
+	SubjSubscriptionUnsubscribe = "subscription.unsubscribe"
 
 	QueueCatalog      = "catalog"
 	QueueSubscription = "subscription"
@@ -43,12 +47,14 @@ type CreateSubscriptionCommand struct {
 	UnsubToken     string `json:"unsub_token"`
 }
 
-type CancelSubscriptionCommand struct {
-	SubscriptionID string `json:"subscription_id"`
+type ConfirmCommand struct {
+	Token string `json:"token"`
 }
 
-// Reply is the uniform request-reply response. Code is a machine-readable
-// domain code ("" on success); participants never put raw error strings on the wire.
+type UnsubscribeCommand struct {
+	Token string `json:"token"`
+}
+
 type Reply struct {
 	OK   bool   `json:"ok"`
 	Code string `json:"code,omitempty"`
@@ -58,7 +64,7 @@ const (
 	CodeRepoNotFound      = "repo_not_found"
 	CodeRateLimited       = "rate_limited"
 	CodeAlreadySubscribed = "already_subscribed"
-	CodeInternal          = "internal"
+	CodeTokenNotFound     = "token_not_found"
 )
 
 type ReleaseDetectedEvent struct {
@@ -72,9 +78,6 @@ type SubscriptionRemovedEvent struct {
 	Repo           string `json:"repo"`
 }
 
-// ConfirmationRequestedEvent is the saga's post-commit terminal step: the
-// orchestrator emits it once the subscription is committed, and the subscription
-// service renders + publishes the confirmation email.
 type ConfirmationRequestedEvent struct {
 	Email        string `json:"email"`
 	Repo         string `json:"repo"`

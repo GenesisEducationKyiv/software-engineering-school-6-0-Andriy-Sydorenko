@@ -21,10 +21,12 @@ import (
 	appdomain "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
 	apprepo "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
 	appsaga "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/saga"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
+	catalogdomain "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/domain"
 	catalogrepo "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/repository"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator"
+	catalogsaga "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/saga"
+	orchdomain "github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/domain"
 	orchestratorrepo "github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/repository"
+	orchservice "github.com/Andriy-Sydorenko/repo-release-notifier/internal/orchestrator/service"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/saga"
 
@@ -103,7 +105,7 @@ func setupSagaInfra() (*sagaInfra, error) {
 	github := &stubValidator{}
 
 	// Catalog participant handlers.
-	catHandler := catalog.NewHandler(catalogrepo.New(catDB), github)
+	catHandler := catalogsaga.NewHandler(catalogrepo.New(catDB), github)
 	if _, err := natsbus.RespondJSON(nc, saga.SubjCatalogRegister, saga.QueueCatalog, catHandler.Register); err != nil {
 		return nil, err
 	}
@@ -116,19 +118,16 @@ func setupSagaInfra() (*sagaInfra, error) {
 	if _, err := natsbus.RespondJSON(nc, saga.SubjSubscriptionCreate, saga.QueueSubscription, subHandler.Create); err != nil {
 		return nil, err
 	}
-	if _, err := natsbus.RespondJSON(nc, saga.SubjSubscriptionCancel, saga.QueueSubscription, subHandler.Cancel); err != nil {
-		return nil, err
-	}
 
 	return &sagaInfra{nc: nc, js: js, orchDB: orchDB, subDB: subDB, catDB: catDB, github: github}, nil
 }
 
-func (s *sagaInfra) newCoordinator() *orchestrator.Coordinator {
-	return orchestrator.NewCoordinator(
-		orchestrator.NewNATSParticipants(s.nc, 5*time.Second),
-		orchestrator.NewNATSConfirmationPublisher(s.js),
+func (s *sagaInfra) newCoordinator() *orchservice.Coordinator {
+	return orchservice.NewCoordinator(
+		orchservice.NewNATSParticipants(s.nc, 5*time.Second),
+		orchservice.NewNATSConfirmationPublisher(s.js),
 		orchestratorrepo.New(s.orchDB),
-		orchestrator.UUIDGen{},
+		orchservice.UUIDGen{},
 	)
 }
 
@@ -226,12 +225,12 @@ func TestSaga_HappyPath(t *testing.T) {
 func TestSaga_BadRepo_Aborts(t *testing.T) {
 	infra := mustSagaInfra(t)
 	infra.reset(t)
-	infra.github.setErr(catalog.ErrRepoNotFound)
+	infra.github.setErr(catalogdomain.ErrRepoNotFound)
 	ctx := context.Background()
 
 	err := infra.newCoordinator().Subscribe(ctx, "a@example.com", "ghost/ghost")
 
-	require.ErrorIs(t, err, orchestrator.ErrRepoNotFound)
+	require.ErrorIs(t, err, orchdomain.ErrRepoNotFound)
 	require.Equal(t, int64(0), count(t, infra.subDB, `SELECT COUNT(*) FROM subscriptions`))
 	require.Equal(t, int64(0), count(t, infra.catDB, `SELECT COUNT(*) FROM repo_registrations`))
 	require.Equal(t, "ABORTED", infra.sagaState(t))
@@ -250,7 +249,7 @@ func TestSaga_CreateFails_Compensates(t *testing.T) {
 
 	err := infra.newCoordinator().Subscribe(ctx, "dup@example.com", "golang/go")
 
-	require.ErrorIs(t, err, orchestrator.ErrAlreadySubscribed)
+	require.ErrorIs(t, err, orchdomain.ErrAlreadySubscribed)
 	// Register ran then the pivot failed → ReleaseRepo compensated it away.
 	require.Equal(t, int64(0), count(t, infra.catDB, `SELECT COUNT(*) FROM repo_registrations WHERE repo=?`, "golang/go"))
 	require.Equal(t, "COMPENSATED", infra.sagaState(t))
@@ -263,9 +262,9 @@ func TestSaga_CrashAfterCommit_RecoverRepublishes(t *testing.T) {
 
 	// Simulate a crash that left the saga COMMITTED but never sent the confirmation.
 	store := orchestratorrepo.New(infra.orchDB)
-	rec := &orchestrator.SagaRecord{
-		SagaID: uuid.NewString(), State: orchestrator.StateCommitted, SubscriptionID: uuid.NewString(),
-		Payload: orchestrator.SagaPayload{Email: "bob@example.com", Repo: "golang/go", ConfirmToken: "c", UnsubToken: "u"},
+	rec := &orchdomain.SagaRecord{
+		SagaID: uuid.NewString(), State: orchdomain.StateCommitted, SubscriptionID: uuid.NewString(),
+		Payload: orchdomain.SagaPayload{Email: "bob@example.com", Repo: "golang/go", ConfirmToken: "c", UnsubToken: "u"},
 	}
 	require.NoError(t, store.Create(ctx, rec))
 

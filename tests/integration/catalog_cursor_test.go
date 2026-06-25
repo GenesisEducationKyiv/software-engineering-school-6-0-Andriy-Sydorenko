@@ -11,8 +11,8 @@ import (
 )
 
 // TestCatalogWatchedRepoUpsert exercises the real GORM upsert (OnConflict on the
-// natural PK + now() stamp) against Postgres — the path mocks can't cover. Moved
-// here with the cursor when the scanner was extracted into Catalog.
+// natural PK) against Postgres — the path mocks can't cover. Moved here with the
+// cursor when the scanner was extracted into Catalog.
 func TestCatalogWatchedRepoUpsert(t *testing.T) {
 	repo := newCatalogRepo(t)
 	ctx := context.Background()
@@ -22,19 +22,16 @@ func TestCatalogWatchedRepoUpsert(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, got)
 
-	// First save inserts the row and stamps last_polled_at.
+	// First save inserts the row.
 	require.NoError(t, repo.SaveWatchedRepoTag(ctx, "golang/go", "v1.0"))
 	got, err = repo.GetWatchedRepo(ctx, "golang/go")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "v1.0", got.LastSeenTag)
-	require.False(t, got.LastPolledAt.IsZero(), "last_polled_at stamped on insert")
-	firstPoll := got.LastPolledAt
 
-	// Second save upserts in place: tag advances, poll bumped, no duplicate row.
+	// Second save upserts in place: tag advances, no duplicate row.
 	require.NoError(t, repo.SaveWatchedRepoTag(ctx, "golang/go", "v1.1"))
 	got, err = repo.GetWatchedRepo(ctx, "golang/go")
 	require.NoError(t, err)
 	assert.Equal(t, "v1.1", got.LastSeenTag)
-	assert.False(t, got.LastPolledAt.Before(firstPoll), "last_polled_at advances on update")
 }

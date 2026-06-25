@@ -13,7 +13,7 @@ import (
 	context "context"
 	reflect "reflect"
 
-	catalog "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
+	domain "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/domain"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -57,10 +57,10 @@ func (mr *MockRepositoryMockRecorder) ActiveRepos(ctx any) *gomock.Call {
 }
 
 // GetWatchedRepo mocks base method.
-func (m *MockRepository) GetWatchedRepo(ctx context.Context, repo string) (*catalog.WatchedRepo, error) {
+func (m *MockRepository) GetWatchedRepo(ctx context.Context, repo string) (*domain.WatchedRepo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetWatchedRepo", ctx, repo)
-	ret0, _ := ret[0].(*catalog.WatchedRepo)
+	ret0, _ := ret[0].(*domain.WatchedRepo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

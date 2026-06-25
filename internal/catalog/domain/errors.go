@@ -1,10 +1,9 @@
-package catalog
+package domain
 
 import "errors"
 
-// Catalog owns its GitHub-validation error sentinels (the GitHub client moves
-// here in Phase 2 and returns these), so the service doesn't depend on the
-// subscription service's domain package.
+// Catalog owns its GitHub-validation error sentinels (returned by the GitHub
+// client), so the service doesn't depend on the subscription service's domain.
 var (
 	ErrRepoNotFound      = errors.New("repository not found on GitHub or is private")
 	ErrRateLimited       = errors.New("GitHub API rate limit exceeded")

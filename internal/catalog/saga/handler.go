@@ -1,4 +1,6 @@
-package catalog
+// Package saga implements the catalog service's saga participant handlers
+// (catalog.register / catalog.release) plus the subscription.removed cleanup.
+package saga
 
 import (
 	"context"
@@ -7,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/domain"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/saga"
 )
@@ -44,7 +47,7 @@ func (h *Handler) Register(ctx context.Context, data []byte) (any, error) {
 		return saga.Reply{OK: false, Code: saga.CodeRepoNotFound}, nil
 	}
 	if err := h.validator.ValidateRepo(ctx, owner, name); err != nil {
-		if errors.Is(err, ErrRateLimited) {
+		if errors.Is(err, domain.ErrRateLimited) {
 			return saga.Reply{OK: false, Code: saga.CodeRateLimited}, nil
 		}
 		return saga.Reply{OK: false, Code: saga.CodeRepoNotFound}, nil

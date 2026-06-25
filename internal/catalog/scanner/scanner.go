@@ -8,12 +8,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/domain"
 )
 
 type Repository interface {
 	ActiveRepos(ctx context.Context) ([]string, error)
-	GetWatchedRepo(ctx context.Context, repo string) (*catalog.WatchedRepo, error)
+	GetWatchedRepo(ctx context.Context, repo string) (*domain.WatchedRepo, error)
 	SaveWatchedRepoTag(ctx context.Context, repo, tag string) error
 }
 
@@ -107,7 +107,7 @@ func (s *Scanner) runOnce(ctx context.Context) {
 				return
 			}
 			if err := s.safeCheckRepo(ctx, repo); err != nil {
-				if errors.Is(err, catalog.ErrRateLimited) {
+				if errors.Is(err, domain.ErrRateLimited) {
 					if rateLimitHit.CompareAndSwap(false, true) {
 						slog.WarnContext(ctx, "scanner: GitHub rate limit hit, aborting cycle")
 					}
@@ -135,7 +135,7 @@ func (s *Scanner) safeCheckRepo(ctx context.Context, repo string) (err error) {
 func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 	parts := strings.SplitN(repo, "/", 2)
 	if len(parts) != 2 {
-		return catalog.ErrInvalidRepoFormat
+		return domain.ErrInvalidRepoFormat
 	}
 
 	// Per-call deadline is enforced by the GitHub client.
@@ -152,9 +152,9 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		return err
 	}
 
-	// No new release, or first sighting: record the poll (stamps last_polled_at,
-	// and baselines the tag on first sighting) and stop. A first sighting is
-	// silent — the current release predates every subscription.
+	// No new release, or first sighting: save the tag (baselines it on first
+	// sighting) and stop. A first sighting is silent — the current release
+	// predates every subscription.
 	if watched == nil || !watched.IsNewRelease(tag) {
 		return s.repo.SaveWatchedRepoTag(ctx, repo, tag)
 	}

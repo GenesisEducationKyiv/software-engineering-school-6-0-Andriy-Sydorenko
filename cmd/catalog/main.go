@@ -17,7 +17,6 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/cache"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/eventpublisher"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/repository"
@@ -29,6 +28,7 @@ import (
 
 	catalogdb "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/db"
 	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/github"
+	catalogsaga "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/saga"
 )
 
 const envFile = ".env"
@@ -102,7 +102,7 @@ func run() error {
 		return fmt.Errorf("ensure streams: %w", err)
 	}
 
-	handler := catalog.NewHandler(repo, gh)
+	handler := catalogsaga.NewHandler(repo, gh)
 	scan := scanner.New(repo, gh, eventpublisher.New(js), cfg.Scanner)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -151,7 +151,7 @@ func startConsumers(
 	ctx context.Context,
 	nc *nats.Conn,
 	js jetstream.JetStream,
-	h *catalog.Handler,
+	h *catalogsaga.Handler,
 	cfg *Config,
 ) (func(), error) {
 	regSub, err := natsbus.RespondJSON(nc, saga.SubjCatalogRegister, saga.QueueCatalog, h.Register)
@@ -187,7 +187,7 @@ func startConsumers(
 // githubClient is the GitHub capability surface wired into both the register
 // handler (repo validation) and the scanner (release fetching).
 type githubClient interface {
-	catalog.RepoValidator
+	catalogsaga.RepoValidator
 	scanner.ReleaseFetcher
 }
 

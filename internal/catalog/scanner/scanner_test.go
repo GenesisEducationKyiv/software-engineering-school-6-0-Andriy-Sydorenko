@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/domain"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/scanner/mocks"
 )
 
@@ -39,7 +39,7 @@ func TestNewReleasePublishesEvent(t *testing.T) {
 	f.repo.EXPECT().ActiveRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
 	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "golang/go").Return(
-		&catalog.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
+		&domain.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
 	)
 	f.repo.EXPECT().SaveWatchedRepoTag(gomock.Any(), "golang/go", "v1.1").Return(nil)
 	f.events.EXPECT().ReleaseDetected(gomock.Any(), "golang/go", "v1.1").Return(nil)
@@ -52,9 +52,9 @@ func TestSameTagNoEvent(t *testing.T) {
 	f.repo.EXPECT().ActiveRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.0", nil)
 	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "golang/go").Return(
-		&catalog.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
+		&domain.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
 	)
-	// Tag unchanged: record the poll (last_polled_at), but no event.
+	// Tag unchanged: re-save the tag, but no event.
 	f.repo.EXPECT().SaveWatchedRepoTag(gomock.Any(), "golang/go", "v1.0").Return(nil)
 
 	f.scanner.runOnce(context.Background())
@@ -85,7 +85,7 @@ func TestRateLimitAbortsCycle(t *testing.T) {
 	// concurrency=1 + atomic signal flag guarantees second repo is skipped.
 	f := newFixture(t)
 	f.repo.EXPECT().ActiveRepos(gomock.Any()).Return([]string{"a/b", "c/d"}, nil)
-	f.github.EXPECT().GetLatestRelease(gomock.Any(), "a", "b").Return("", catalog.ErrRateLimited)
+	f.github.EXPECT().GetLatestRelease(gomock.Any(), "a", "b").Return("", domain.ErrRateLimited)
 
 	f.scanner.runOnce(context.Background())
 }
@@ -97,7 +97,7 @@ func TestInvalidRepoFormatContinues(t *testing.T) {
 	)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
 	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "golang/go").Return(
-		&catalog.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
+		&domain.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
 	)
 	f.repo.EXPECT().SaveWatchedRepoTag(gomock.Any(), "golang/go", "v1.1").Return(nil)
 	f.events.EXPECT().ReleaseDetected(gomock.Any(), "golang/go", "v1.1").Return(nil)
@@ -153,7 +153,7 @@ func TestPanicInOneRepoDoesNotKillCycle(t *testing.T) {
 	)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "good", "two").Return("v2.0", nil)
 	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "good/two").Return(
-		&catalog.WatchedRepo{Repo: "good/two", LastSeenTag: "v1.0"}, nil,
+		&domain.WatchedRepo{Repo: "good/two", LastSeenTag: "v1.0"}, nil,
 	)
 	f.repo.EXPECT().SaveWatchedRepoTag(gomock.Any(), "good/two", "v2.0").Return(nil)
 	f.events.EXPECT().ReleaseDetected(gomock.Any(), "good/two", "v2.0").Return(nil)
@@ -168,7 +168,7 @@ func TestSaveTagFailureSkipsEvent(t *testing.T) {
 	f.repo.EXPECT().ActiveRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
 	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "golang/go").Return(
-		&catalog.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
+		&domain.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
 	)
 	f.repo.EXPECT().SaveWatchedRepoTag(
 		gomock.Any(), "golang/go", "v1.1",
@@ -179,7 +179,7 @@ func TestSaveTagFailureSkipsEvent(t *testing.T) {
 }
 
 func TestIsNewReleaseContract(t *testing.T) {
-	w := &catalog.WatchedRepo{LastSeenTag: "v1.0"}
+	w := &domain.WatchedRepo{LastSeenTag: "v1.0"}
 	assert.True(t, w.IsNewRelease("v1.1"))
 	assert.False(t, w.IsNewRelease("v1.0"))
 	assert.False(t, w.IsNewRelease(""), "empty incoming must not be treated as a regression")

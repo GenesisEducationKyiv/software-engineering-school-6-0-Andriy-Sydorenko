@@ -1,12 +1,11 @@
-package catalog
+package domain
 
 import "time"
 
 // WatchedRepo is the per-repo release cursor the scanner advances.
 type WatchedRepo struct {
-	Repo         string    `gorm:"primaryKey;type:varchar(255)"`
-	LastSeenTag  string    `gorm:"type:varchar(255);default:''"`
-	LastPolledAt time.Time `gorm:"not null;default:now()"`
+	Repo        string `gorm:"primaryKey;type:varchar(255)"`
+	LastSeenTag string `gorm:"type:varchar(255);default:''"`
 }
 
 func (w WatchedRepo) IsNewRelease(tag string) bool { return tag != "" && tag != w.LastSeenTag }

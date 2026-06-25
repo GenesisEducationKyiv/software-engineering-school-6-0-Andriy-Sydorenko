@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/cache"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/domain"
 )
 
 const cacheTTL = 10 * time.Minute
@@ -42,7 +42,7 @@ func (c *CachedClient) ValidateRepo(ctx context.Context, owner, repo string) err
 		case cachedOK:
 			return nil
 		case cachedNotFound:
-			return catalog.ErrRepoNotFound
+			return domain.ErrRepoNotFound
 		}
 	} else if !errors.Is(err, cache.ErrMiss) {
 		slog.WarnContext(ctx, "cache: get failed", "key", key, "err", err)
@@ -52,7 +52,7 @@ func (c *CachedClient) ValidateRepo(ctx context.Context, owner, repo string) err
 	switch {
 	case err == nil:
 		c.set(ctx, key, cachedOK)
-	case errors.Is(err, catalog.ErrRepoNotFound):
+	case errors.Is(err, domain.ErrRepoNotFound):
 		c.set(ctx, key, cachedNotFound)
 	}
 	return err

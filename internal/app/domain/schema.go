@@ -1,10 +1,5 @@
 package domain
 
-type SubscribeRequest struct {
-	Email string `json:"email" binding:"required,email"`
-	Repo  string `json:"repo" binding:"required"`
-}
-
 type SubscriptionResponse struct {
 	Email     string `json:"email"`
 	Repo      string `json:"repo"`

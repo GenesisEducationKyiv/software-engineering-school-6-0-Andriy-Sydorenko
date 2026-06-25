@@ -4,7 +4,6 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- recovery after a crash. Holds no business data beyond what the saga needs to resume.
 CREATE TABLE IF NOT EXISTS saga_log (
     saga_id         UUID PRIMARY KEY,
-    type            TEXT        NOT NULL DEFAULT 'subscribe',
     state           TEXT        NOT NULL,
     subscription_id UUID        NOT NULL,
     payload         JSONB       NOT NULL,

@@ -72,12 +72,18 @@ func NewPostgres(cfg *Config) (*gorm.DB, error) {
 // Migrate applies pending SQL migrations. Tracking lives in the
 // schema_migrations table managed by golang-migrate.
 func Migrate(gormDB *gorm.DB) error {
-	sqlDB, _ := gormDB.DB()
+	sqlDB, err := gormDB.DB()
+	if err != nil {
+		return fmt.Errorf("get sql.DB: %w", err)
+	}
 	driver, err := migratepg.WithInstance(sqlDB, &migratepg.Config{})
 	if err != nil {
 		return err
 	}
-	src, _ := iofs.New(migrationsFS, "migrations")
+	src, err := iofs.New(migrationsFS, "migrations")
+	if err != nil {
+		return fmt.Errorf("load migrations: %w", err)
+	}
 	m, err := migrate.NewWithInstance("iofs", src, "postgres", driver)
 	if err != nil {
 		return err

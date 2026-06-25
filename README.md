@@ -19,15 +19,18 @@ SMTP for email.
 Live deployment: <https://repo-release-notifier.vercel.app>
 
 The expected path is `docker compose up --build`. That brings up
-Postgres, Redis, NATS, the app and the notifier together; migrations
-run on startup.
+NATS, Redis, three Postgres instances, and the four services
+(orchestrator, subscription, catalog, notifier); migrations run on
+startup.
 
 Locally, once `.env` is populated (`cp .env.example .env` and fill
 in SMTP credentials at minimum):
 
 ```
-go run ./cmd/app        # core: HTTP API + scanner
-go run ./cmd/notifier   # notifier: NATS consumer → SMTP
+go run ./cmd/orchestrator  # saga coordinator: POST /subscribe
+go run ./cmd/app           # subscription: confirm/unsubscribe API + saga participant
+go run ./cmd/catalog       # repo registry + release scanner + saga participant
+go run ./cmd/notifier      # NATS consumer → SMTP
 go test ./... -race
 golangci-lint run ./...
 ```
@@ -51,7 +54,7 @@ stateful service owns its **own Postgres**. Full topology, diagrams, and the sag
 - **orchestrator** (`cmd/orchestrator`) — owns the subscribe **saga** (a `saga_log`, no
   business data) and the public `POST /subscribe`.
 - **subscription** (`cmd/app`) — `subscriptions` + tokens, email composition, and the
-  confirm / unsubscribe / list API. Saga participant (`create` / `cancel`).
+  confirm / unsubscribe / list API. Saga participant (`create`, the pivot).
 - **catalog** (`cmd/catalog`) — the watched-repo registry + the release scanner + GitHub
   client/cache. Saga participant (`register` / `release`).
 - **notifier** (`cmd/notifier`) — a stateless JetStream consumer that delivers pre-rendered
@@ -67,7 +70,7 @@ internal/
   app/                 subscription service
     api/ service/      HTTP handlers + business logic + email composer (templates)
     repository/ db/    GORM queries, Postgres connection + migrations
-    saga/              subscription.create / cancel handlers
+    saga/              subscription.create handler (the saga pivot)
     releaseconsumer/ confirmationconsumer/   release fan-out + confirmation email
   catalog/             register/release handlers, scanner, github, cache, repository
   notifier/            stateless SMTP sender + JetStream consumer
@@ -150,17 +153,16 @@ Runs in the **catalog** service as a goroutine fed the process context. Each tic
 
 ### Silent first scan
 
-A freshly confirmed subscription has `last_seen_tag = ""`. The
-first scan records the current tag but does **not** email — a new
-subscriber shouldn't immediately receive a notification for a
-release that happened a year ago. From the second scan onwards,
-a change triggers an email.
+A newly registered repo's cursor (`watched_repos.last_seen_tag`) starts
+`""`. The first scan records the current tag but does **not** publish — a
+new subscriber shouldn't immediately get a notification for a release
+that happened a year ago. From the second scan onwards, a change fires.
 
 ### Late unsubscribe (accepted)
 
-Release recipients are resolved when the scan **publishes**, so a user
-who unsubscribes in the brief window between publish and send may still
-receive that one release email. This is deliberate — the same tolerance
+Release recipients are resolved when the subscription service handles
+`release.detected`, so a user who unsubscribes in the brief window before
+send may still receive that one release email. This is deliberate — the same tolerance
 every email system has ("allow a few days for changes to take effect"),
 not a bug. See [ADR-013](docs/adr/013-message-broker-nats-jetstream.md).
 
@@ -176,8 +178,9 @@ CASCADE, created_at)`. `public_id` is the UUID the orchestrator mints as the cro
 identity. Unique indexes on `(email, repo)` and `public_id`; subscriptions are hard-deleted
 on unsubscribe, so a plain unique index suffices.
 
-**catalog** — `watched_repos (repo PK, last_seen_tag, last_polled_at)` (the scan cursor) +
-`repo_registrations (subscription_id PK, repo)` (a repo is polled while it has ≥ 1).
+**catalog** — `watched_repos (repo PK, last_seen_tag)` (the scan cursor) +
+`repo_registrations (subscription_id PK, repo, FK → watched_repos)` (a repo is polled while
+it has ≥ 1 registration).
 
 **orchestrator** — `saga_log (saga_id PK, state, subscription_id, payload, …)`, the durable
 record that drives recovery.
@@ -212,15 +215,14 @@ changes; the dependency is genuinely optional.
 
 ## HTML subscription page
 
-`GET /` serves a minimal form from `internal/templates/pages/subscribe.html`
-(embedded via `//go:embed`). It `fetch`es `POST /api/subscribe`
-with a JSON body and shows inline success / error messages. If
-the deployment has an API key configured, there's an optional
-password field on the form for it.
+`GET /` on the **orchestrator** serves a minimal form from
+`internal/orchestrator/api/subscribe.html` (embedded via `//go:embed`).
+It `fetch`es `POST /subscribe` same-origin — the orchestrator owns the
+subscribe saga, so the form lives with its endpoint — with a JSON body,
+and shows inline success / error messages.
 
-All HTML the service ever emits — emails and public pages — lives
-under `internal/templates/` and goes through `RenderEmail` or
-`Page` helpers. Consumers don't touch the filesystem.
+The subscription service emits only emails now; they're rendered from
+templates under `internal/app/templates/emails/` via `RenderEmail`.
 
 ---
 
@@ -250,8 +252,9 @@ with three things worth mentioning:
 
 ## API key authentication
 
-`POST /api/subscribe` and `GET /api/subscriptions` sit behind an
-`X-API-Key` header check when `API_KEY` is set. Confirm and
+`GET /api/subscriptions` (on the subscription service) sits behind an
+`X-API-Key` header check when `API_KEY` is set. Subscribe is public —
+the confirmation email is the double opt-in — and confirm and
 unsubscribe stay open because they're opened from mail clients,
 which can't attach request headers — the token in the URL is the
 capability for those routes (UUID v4, 122 bits of entropy).

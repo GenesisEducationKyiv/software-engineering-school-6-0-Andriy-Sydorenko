@@ -1,5 +1,4 @@
 services:
-  # --- per-service databases (no shared DB: each service owns its own) ------
   db-subscription:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -66,7 +65,6 @@ services:
     ports:
       - "${NATS_PORT:-4222}:4222"
 
-  # --- orchestrator: front door for the subscribe saga ----------------------
   orchestrator:
     build:
       context: .
@@ -91,7 +89,6 @@ services:
     ports:
       - "${ORCHESTRATOR_PORT:-8090}:8090"
 
-  # --- subscription service: confirm/unsubscribe API + saga participant -----
   app:
     build:
       context: .
@@ -110,7 +107,6 @@ services:
       DB_NAME: subscription
       DB_SSLMODE: disable
       PORT: 8080
-      BASE_URL: ${BASE_URL:-http://localhost:8080}
       NATS_URL: nats://nats:4222
       API_KEY: ${API_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -118,7 +114,6 @@ services:
     ports:
       - "${PORT:-8080}:8080"
 
-  # --- catalog: repo registry + scanner + saga participant ------------------
   catalog:
     build:
       context: .
@@ -154,13 +149,12 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+    env_file:
+      - path: .env.notifier
+        required: false
     environment:
       NATS_URL: nats://nats:4222
       ADMIN_ADDR: ":9091"
-      SMTP_HOST: ${SMTP_HOST}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USERNAME: ${SMTP_USERNAME}
-      SMTP_PASSWORD: ${SMTP_PASSWORD}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: ${LOG_FORMAT:-json}
 

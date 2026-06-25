@@ -44,6 +44,8 @@ The saga has three zones:
 
 **Unsubscribe is deliberately *not* a saga.** Deleting the subscription is the user's goal and is never rolled back; releasing the Catalog registration is idempotent cleanup that can lag. A "compensation" here would mean re-inserting the subscription the user just deleted — a wrong, degenerate compensation. So unsubscribe emits a `subscription.removed` event that Catalog consumes — a reliable-event / eventual-consistency problem, not a distributed transaction. Knowing which operation needs a saga and which does not is the core design judgement here.
 
+The **release-notification** path is the same kind of call, and likewise event-driven choreography rather than a saga: scan → per-recipient fan-out → deliver is best-effort, idempotent, and retriable, with nothing to compensate. Orchestration is reserved for subscribe — the one flow with two stateful writes that must be atomic-in-effect.
+
 ---
 
 ## Consequences
@@ -118,7 +120,7 @@ No data migration of existing rows. The change is structural and ships together:
 
 ## Security Considerations
 
-The public `POST /subscribe` entry point moves from the subscription service to the orchestrator; confirm/unsubscribe stay on the subscription service. Saga commands run over the broker on the internal network, unauthenticated — the same posture as the existing internal NATS traffic (ADR-013); broker auth + transport encryption remain the documented future upgrade. No new external attack surface: the saga is internal coordination behind one public endpoint. Internal error details are never returned to the client (the orchestrator maps unmapped failures to a generic 500).
+The public `POST /subscribe` entry point moves from the subscription service to the orchestrator; confirm and unsubscribe stay on the subscription service as open, token-capability endpoints — the unguessable per-subscription token in the URL is the authorization (open by design so a mail client can act on the link without attaching headers; token rationale in [ADR-005](005-token-strategy.md)), unchanged by this work. Saga commands run over the broker on the internal network, unauthenticated — the same posture as the existing internal NATS traffic (ADR-013); broker auth + transport encryption remain the documented future upgrade. No new external attack surface: the saga is internal coordination behind one public endpoint. Internal error details are never returned to the client (the orchestrator maps unmapped failures to a generic 500).
 
 ---
 

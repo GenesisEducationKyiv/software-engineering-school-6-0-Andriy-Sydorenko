@@ -30,10 +30,9 @@ Distributed-transaction strategy (the saga): [ADR-014](adr/014-cross-service-tra
 
 Two NATS styles, by job:
 
-- **Core NATS request-reply** carries the **saga commands + compensations** — the
+- **Core NATS request-reply** carries the **saga commands + compensation** — the
   orchestrator needs an immediate ok/fail reply to decide commit-vs-compensate:
-  `saga.catalog.register` / `saga.catalog.release`, `saga.subscription.create` /
-  `saga.subscription.cancel`.
+  `saga.catalog.register` / `saga.catalog.release` and `saga.subscription.create`.
 - **JetStream** carries the durable, fire-and-forget **events + emails**:
   `events.release.detected`, `events.subscription.removed`, `events.confirmation.requested`
   (stream `EVENTS`), and `notify.confirmation` / `notify.release` (stream `NOTIFICATIONS`,
@@ -49,7 +48,7 @@ flowchart TB
   end
   subgraph SUB["cmd/app — subscription"]
     API["confirm / unsubscribe API"]
-    SH["saga create/cancel<br/>+ release/confirmation consumers<br/>+ email composer"]
+    SH["saga create<br/>+ release/confirmation consumers<br/>+ email composer"]
   end
   subgraph CAT["cmd/catalog"]
     CH["register/release handlers"]
@@ -89,8 +88,8 @@ edge, `release.detected`, lives outside the saga.
 ```
 ── BEFORE PIVOT (compensatable) ───────────────────────────────
  A  saga.catalog.register   validate on GitHub, register repo     comp: saga.catalog.release
-── PIVOT ──────────────────────────────────────────────────────
- B  saga.subscription.create  INSERT subscription + token         comp: saga.subscription.cancel
+── PIVOT (the commit point — no compensation) ─────────────────
+ B  saga.subscription.create  INSERT subscription + token in one local tx
 ── AFTER PIVOT (terminal, retriable, never compensated) ────────
  C  publish events.confirmation.requested   (only after saga_log = COMMITTED)
        → subscription service renders + publishes notify.confirmation → notifier → SMTP
@@ -103,7 +102,7 @@ edge, `release.detected`, lives outside the saga.
   after it; the confirmation re-publish is deduplicated.
 
 The `subscription_id` (a UUID the orchestrator mints) is the cross-service identity that
-keeps `register`/`release` and `create`/`cancel` **idempotent** under retries and recovery.
+keeps `register` / `release` and `create` **idempotent** under retries and recovery.
 
 ## Other flows
 

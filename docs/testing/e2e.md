@@ -1,185 +1,149 @@
 # E2E tests
 
-Browser → real app process → **real Postgres + real Mailpit**. The
-GitHub upstream is the only thing faked (in-process `httptest.Server`
-fixture). This is the **only layer that exercises cross-process flows
-and the mail → URL → DB token round-trip** — if a regression breaks
-that loop, no other suite catches it.
+API-driven, **in-process**, across all four services. The harness boots
+the **orchestrator**, **subscription**, **catalog**, and **notifier**
+in one test process against **ephemeral Postgres (one per stateful
+service)** + **Mailpit** (real SMTP capture) + a **NATS + JetStream**
+container, then drives the real HTTP + broker flow. No browser.
+
+This is the **only layer that exercises the whole subscribe saga across
+the broker and the mail handoff** — orchestrator request-reply →
+catalog/subscription participants → confirmation event → notifier →
+SMTP → Mailpit. If a regression breaks that loop, no other suite
+catches it.
 
 If you want the cross-layer philosophy, read
-[ADR-008](../adr/008-testing-strategy.md). For commands and
-prerequisites, [`README.md`](README.md).
+[ADR-008](../adr/008-testing-strategy.md). The topology these tests
+exercise is in [`../microservices.md`](../microservices.md). For
+commands and prerequisites, [`README.md`](README.md).
 
 ## What this layer proves
 
 Unit tests catch logic in isolation. Integration catches wiring +
-DB side-effects with stubbed external boundaries. **E2e catches what
-both miss**:
+DB side-effects with the external boundaries (GitHub, SMTP) stubbed.
+**E2e catches what both miss**:
 
-- **Cross-process behaviour.** The browser, the app, Mailpit, and
-  Postgres are separate processes. A bug in the listener address, the
-  CORS config, the gin middleware order — any of these passes every
-  unit and integration test and fails the user. E2e is the layer that
-  catches them.
-- **The mail → token → handler → DB round-trip.** Subscribe → email
-  body → URL extraction → handler → row update is a loop that spans
-  every layer of the stack. Unit can't test the loop (it's not
-  in-process). Integration can't test the loop (the mailer is
-  stubbed). E2e is where it lives.
-- **The real GitHub HTTP client.** Integration stubs the client at
-  the `RepoValidator` interface — skipping all of `setHeaders`,
-  retry, status parsing. E2e routes the real client at an
-  `httptest.Server`, so real auth headers and real response parsing
-  run on every test.
-- **Real SMTP + real MIME.** The composer's MIME output is parsed
-  back by Mailpit on receipt. If the body is malformed, Mailpit
-  rejects it — proving the real wire format works.
-- **Browser-rendered HTML/JS.** The subscribe page has inline JS
-  (form submit, status class flipping, HTML5 validation). No API
-  test catches a regression in that JS.
+- **The saga across the real broker.** The orchestrator coordinates
+  catalog + subscription over Core NATS request-reply and publishes
+  the confirmation event over JetStream. A bug in stream setup,
+  subject wiring, or consumer config passes every unit and integration
+  test of the individual handlers and only surfaces when all four
+  services run against one live broker.
+- **The confirmation event → email → token round-trip.** The
+  orchestrator commits, publishes `events.confirmation.requested`, the
+  subscription service renders the email and publishes
+  `notify.confirmation`, the notifier delivers it to Mailpit. The
+  confirm/unsubscribe tokens are then pulled **out of the captured
+  email body** and replayed against the subscription API. Unit can't
+  test the loop (it's not cross-service); integration stubs the mailer.
+- **Real SMTP + real MIME.** The notifier sends through a real
+  `SMTPMailer` to Mailpit, which parses the MIME back on receipt. A
+  malformed body is rejected by Mailpit — proving the wire format
+  works.
+- **The real GitHub HTTP client.** Catalog's `register` participant
+  validates the repo against the real `github.Client`, pointed at an
+  in-process `httptest.Server` fixture, so real headers + status
+  parsing run on every subscribe.
+- **Saga abort with no side-effects.** A bad repo must abort the saga
+  before the pivot — no subscription row, no email.
 
-The deliberate trade-off: **e2e is narrow on purpose**. We don't
-re-assert error-code mapping, pagination, or filter logic here —
-those have integration / unit coverage and adding e2e on top would
-slow CI for no signal gain.
+The deliberate trade-off: **e2e is narrow on purpose**. Per-endpoint
+error mapping, pagination, token edge cases, and the individual saga
+state transitions have integration / unit coverage; re-asserting them
+here would only slow CI.
 
 ## What's tested and why
 
-11 tests across two suites. Each test exists because no cheaper layer
-catches the bug class.
+One suite, two tests. Each exists because no cheaper layer catches the
+bug class.
 
-### `SubscribeSuite` (9 tests, default harness)
+### `SubscribeSuite` (`tests/e2e/subscribe_test.go`)
 
-The browser-driven UI flow + the cross-process round-trip + GitHub
-failure surfaces.
+Drives the orchestrator's public `POST /subscribe` and verifies state
+**through behavior** — the captured email and the one-shot tokens —
+not DB reads (those are the integration tier's job).
 
-- **`TestRendersForm`** — labels and inputs are reachable by their
-  accessible names. Regression here breaks screen readers + every
-  other test (they all use `getByLabel`).
-- **`TestHappyPath`** — full subscribe flow including the `status ok`
-  CSS class flip and form reset. Catches JS-side regressions a
-  cURL-against-the-endpoint test would miss.
-- **`TestDuplicate`** — two submits of the same payload, first 200
-  second 409. Asserted via `ExpectResponse` to avoid a race where
-  the `status` element transitions through the success class before
-  the second response lands.
-- **`TestRepoNotFound`** — pre-stages the GitHub fixture
-  (`SetBehavior("ghost", GHNotFound)`), then submits via the form.
-  Proves the real `github.Client` parses 404, the service maps it,
-  the handler renders it, and the JS shows it.
-- **`TestHTML5Validation`** — malformed repo string + bad email.
-  Asserts **no POST is fired** (not "the status div has display:none"
-  — that's testing CSS, not behaviour). Browser's pattern validation
-  is doing the work; if a regression in the HTML breaks it, this
-  catches it.
-- **`TestNetworkFailure`** — `page.Route` aborts the request before
-  the server sees it. The JS error handler must show a useful
-  message; a regression that silently swallows the error fails this.
-- **`TestLifecycle`** — the full round-trip. POST → poll Mailpit for
-  the real email → extract confirm token from the body → `GET
-  /api/confirm/:t` → `GET /api/unsubscribe/:t` → re-use the
-  unsubscribe token (must fail, proving one-shot). This is the case
-  the harness exists to make possible — no cheaper layer can run it.
-- **`TestSubscribe_RateLimited`** — GitHub fixture returns 429 with
-  rate-limit headers; the real `github.Client` recognises it; the
-  service maps to `ErrRateLimited`; the handler returns the right
-  status; the UI surfaces it. No other test exercises the full chain
-  on a non-OK upstream response.
-- **`TestSubscribe_ServerError`** — same chain for 5xx.
-
-### `AuthSuite` (2 tests, separate harness with APIKey enforced)
-
-Lives in a different suite because it needs the API-key middleware
-**actually enforcing**, and toggling that mid-suite would break
-prior tests' baseURL contract.
-
-- **`TestSubscriptions_NoKey_401`** — middleware mount point is
-  right; a missing header gets a 401 specifically (not 403 or 200).
-- **`TestSubscriptions_WrongKey_403`** — the middleware distinguishes
-  "no key" from "wrong key", which matters for client retry logic.
+- **`TestLifecycle`** — the full happy path across all four services.
+  `POST /subscribe` (200) → poll Mailpit for the real confirmation
+  email → extract the confirm + unsubscribe tokens from the body →
+  `GET /api/confirm/:t` (200) → `GET /api/unsubscribe/:t` (200) →
+  replay the unsubscribe token (must **not** be 200, proving it's
+  one-shot). This is the case the harness exists to make possible — no
+  cheaper layer can run it.
+- **`TestBadRepo_AbortsWithNoEmail`** — stages the GitHub fixture to
+  return 404 for the owner (`GitHub.SetBehavior("ghost", GHNotFound)`),
+  then subscribes. Asserts `POST /subscribe` returns 404 **and** the
+  subscription DB has zero rows — the saga aborted before the pivot,
+  so nothing was created and no email was sent.
 
 ## What's wired vs faked
 
 | Layer | Real | Fixture |
 |---|---|---|
-| Router (`gin`) | ✓ | |
-| Auth middleware (`X-API-Key`) | ✓ (opt-in via `Options.APIKey`) | |
-| Service + repository | ✓ | |
-| Postgres (testcontainers, migrated) | ✓ | |
-| Notifier + `SMTPMailer` (real SMTP send) | ✓ | |
+| Orchestrator (`POST /subscribe`, coordinator, `saga_log`) | ✓ | |
+| Subscription service (saga create, confirm/unsubscribe API, email composer) | ✓ | |
+| Catalog (register/release participants) | ✓ | |
+| Notifier (JetStream consumer → real SMTP send) | ✓ | |
+| NATS + JetStream (testcontainers, streams provisioned) | ✓ | |
+| Postgres — one per stateful service (testcontainers, migrated) | ✓ | |
 | Mailpit (real SMTP receive + HTTP API) | ✓ | |
 | GitHub client (real HTTP, headers, parsing) | ✓ | `httptest.Server` serving `/repos/:owner/:repo[/releases/latest]` |
-| Browser (Chromium via Playwright) | ✓ | |
 
-Two **production seams** make this possible without `if testing`
-branches anywhere in prod code:
-
-| Env | Wires | Default |
-|---|---|---|
-| `GITHUB_API_URL` | `internal/github.Config.BaseURL` | `https://api.github.com` |
-| `SMTP_HOST` / `SMTP_PORT` | `internal/notifier.Config` | `.env` / k8s secret |
-
-Both are real config knobs (staging uses them); the harness just sets
-them to the testcontainers / `httptest.Server` URLs.
+The GitHub upstream is the **only** faked dependency — pointed at via
+the `github.WithBaseURL` seam, a real config knob (staging uses it),
+so no `if testing` branch lives in production code.
 
 ## The harness
 
-`e2e/harness/` is a regular Go package, not test-only plumbing. The
-public API:
+`tests/e2e/harness/` is a regular Go package, gated behind
+`//go:build e2e`. `New(t)` boots the containers and wires the four
+in-process services; cleanup is registered with `t.Cleanup`.
 
 | Field / method | Purpose |
 |---|---|
-| `New(t, opts...)` | Boots Postgres + Mailpit + Chromium + GH fixture + app, returns `*Harness`. Cleanup wired to `t.Cleanup`. |
-| `BaseURL` | App URL on the host (`http://127.0.0.1:<port>`) |
-| `BrowserBaseURL` | Same app, addressable from inside the browser container (`http://host.testcontainers.internal:<port>`) |
-| `BrowserWSURL` | CDP websocket endpoint for `playwright.Chromium.ConnectOverCDP` |
+| `New(t, opts...)` | Boots NATS + Mailpit + three Postgres + the GH fixture, wires all four services in-process, returns `*Harness`. |
+| `OrchestratorURL` | Orchestrator HTTP root (`POST /subscribe`) |
+| `AppURL` | Subscription service HTTP root (confirm / unsubscribe / list) |
 | `MailpitURL` | Mailpit HTTP API root |
-| `APIKey` | Mirrors `Options.APIKey` (empty = middleware bypass) |
-| `DB` | `*gorm.DB` for direct row inspection |
+| `SubDB` / `CatDB` / `OrchDB` | `*gorm.DB` per service for direct row inspection |
 | `GitHub` | `*GitHubFixture` — `SetBehavior(owner, b)`, `Reset()` |
-| `TruncateDB(t)` | Wipes `subscriptions` |
+| `TruncateDB(t)` | Wipes mutable rows across all three service DBs |
 | `ResetMailpit(t)` | Deletes all captured messages |
-| `WaitForMail(t, addr, timeout)` | Polls Mailpit, extracts confirm + unsub tokens by regex on the plain-text body |
+| `WaitForMail(t, addr, timeout)` | Polls Mailpit, extracts confirm + unsub tokens by regex on the email body |
+| `DumpContainerLogs(t)` | On failure, dumps each container's log into `_artifacts/` for CI inspection |
 | `BaseSuite` | `testify/suite` embed; owns one `Harness` per suite, resets DB + Mailpit + GH fixture between tests |
 
-`Options`:
-- `GHValidator` — fully replace the GitHub fixture + real-client
-  wiring (use only when a test needs a custom stub, not for
-  per-behavior overrides).
-- `APIKey` — enable the API-key middleware. Default empty so
-  browser-form tests work without a header; `AuthSuite` opts in.
+`Options` is currently empty — reserved for future per-suite tuning.
 
 ## Layout
 
 ```
 tests/e2e/
-  ui_test.go               SubscribeSuite + TestMain + shared helpers
-  lifecycle_test.go        SubscribeSuite: TestLifecycle
-  github_failures_test.go  SubscribeSuite: rate-limited, server-error
-  auth_test.go             AuthSuite (separate harness, APIKey enforced)
-  harness/                 testcontainers + in-process app + fixtures
-    harness.go             New(t, opts), shutdown, helpers
-    browser.go             Chromium sidecar + CDP ws discovery
-    suite.go               BaseSuite (testify) — owns one Harness
-    github_fixture.go      httptest.Server with per-owner behavior map
-    mailpit.go             WaitForMail — polls + extracts tokens
-    smoke_test.go          Self-test: /health + real SMTP round-trip
+  subscribe_test.go        SubscribeSuite: TestLifecycle, TestBadRepo_AbortsWithNoEmail
+  harness/                 testcontainers + in-process four-service wiring
+    harness.go             New(t): boots containers, wires all four services, shutdown
+    suite.go               BaseSuite (testify) — owns one Harness, resets between tests
+    github_fixture.go      httptest.Server with per-owner behavior map (GHOK/NotFound/RateLimited/ServerError)
+    mailpit.go             WaitForMail — polls Mailpit + extracts tokens from the body
+    artifacts.go           DumpContainerLogs — failure diagnostics into _artifacts/
 ```
 
 ## Stack
 
-- **Browser driver**: `playwright-community/playwright-go` connecting
-  via CDP to a per-harness `chromedp/headless-shell` sidecar
-  container. The playwright Node driver subprocess is shared across
-  suites via `TestMain`; per-test isolation is a fresh
-  `BrowserContext`.
-- **Container lifecycle**: `testcontainers-go` — Postgres 16 module
-  (`postgres:16-alpine`) + Mailpit via generic container.
-- **Suite framework**: `testify/suite` — `harness.BaseSuite` owns
-  one Harness per suite.
-- **Assertions**: `testify/require` for setup hard-fail;
-  Playwright's `PlaywrightAssertions` for browser-driven waits
-  (auto-retry on attached/visible/text-match).
+- **No browser.** The flow is driven entirely over HTTP (`net/http`)
+  and the broker — there is no Playwright, CDP, or Chromium anywhere.
+- **Container lifecycle**: `testcontainers-go` — three `postgres:16-alpine`
+  (one per stateful service), Mailpit (`axllent/mailpit`), and NATS
+  (`nats:2.10-alpine`, `-js` for JetStream) via generic containers.
+- **In-process services**: orchestrator + subscription expose HTTP on
+  ephemeral `127.0.0.1` ports; catalog + notifier run as broker
+  consumers. The subscription app URL is resolved *before* the email
+  composer is wired, so confirm/unsubscribe links point at the live
+  listener.
+- **Suite framework**: `testify/suite` — `harness.BaseSuite` owns one
+  Harness per suite.
+- **Assertions**: `testify/require` — hard-fail; polling with
+  `WaitForMail` for the async mail handoff.
 
 ## Running
 
@@ -188,126 +152,75 @@ make test-e2e
 # go test -tags=e2e -timeout=5m -count=1 ./tests/e2e/...
 ```
 
-Requires only Docker. testcontainers boots Postgres 16, Mailpit, and a
-Chromium sidecar (`chromedp/headless-shell:stable`, ~360 MB);
-`playwright-go` connects to it via `Chromium.ConnectOverCDP(wsURL)`.
-The browser dials back to the in-process app through
-`host.testcontainers.internal:<port>`, provisioned by testcontainers'
-`HostAccessPorts`.
+Requires only Docker. testcontainers boots the three Postgres
+instances, Mailpit, and NATS at runtime. Wall time is dominated by
+container startup; the tests themselves are quick.
 
-`TestMain` calls `playwright.Install(SkipInstallBrowsers: true)`
-before `playwright.Run()` — first invocation fetches the ~50 MB
-Node driver into `~/.cache/ms-playwright-go`, subsequent runs no-op.
-No manual CLI step locally or in CI.
-
-### Trade-offs of this wiring
-
-**Pros**
-- Host prereqs are `git + docker + go`. No `playwright install` step
-  in the Makefile, README, or CI.
-- No Chromium binary on the user's home directory; no apt packages.
-  Browser bytes live in Docker's image cache, image tag pinned in
-  `tests/e2e/harness/browser.go`.
-- `playwright.Install` is idempotent and silent on cache-hit, so the
-  developer UX is identical to `go mod download`.
-
-**Cons**
-- The playwright-go Node driver still lives on the host (~50 MB).
-  "Zero host install" is *almost* but not *literally* true — keeping
-  the playwright API means keeping the driver.
-- First `make test-e2e` is slower by one driver fetch + one image
-  pull. Both cache, so it's strictly one-time.
-- The Chromium sidecar adds one more container per harness to start,
-  on top of Postgres and Mailpit.
-- Runtime dependency on the playwright-go CDN being reachable on
-  first run (mirrors the `go mod` dependency on `proxy.golang.org`).
-
-Eliminating the driver would require swapping `playwright-go` for a
-pure-Go CDP client (`chromedp` or `go-rod`) and rewriting every
-`SubscribeSuite` test. Out of scope here.
-
-Wall time is dominated by container startup — three containers per
-harness, two harness instances (images cached by Docker after first
-pull). Rough local figure, not benchmarked.
-
-Gated behind `//go:build e2e` so the default `go test ./...` unit
-run stays container-free and browser-free.
+Gated behind `//go:build e2e` so the default `go test ./...` unit run
+stays container-free.
 
 ## Conventions
 
-- **One suite per API-key mode.** Toggling the middleware mid-suite
-  would break the BaseURL contract for prior tests. `AuthSuite`
-  exists precisely for the protected paths.
+- **State is verified through behavior, not DB reads.** Tokens come
+  from the real captured email (`WaitForMail`); the one-shot property
+  is proven by replaying the token, not by querying the row. The
+  bad-repo test is the one exception — it asserts zero rows to prove
+  the saga left no trace.
 - **`SetBehavior` is per-test.** `BaseSuite.SetupTest` calls
   `GitHub.Reset()` so behavior overrides don't leak between tests.
-- **Tokens come from real mail.** Don't read them from the DB —
-  `WaitForMail` proves the mail → URL → DB round-trip actually
-  works. Reading from the DB skips the whole point of e2e.
-- **Per-test browser context.** `s.page()` opens a fresh
-  `BrowserContext` so cookies / routes / network rewrites don't
-  bleed between tests.
 - **Hand-rolled fixtures only at the upstream boundary.** GitHub is
-  the only one. Every other dep is real.
+  the only one; every other dependency is real.
 
 ## For reviewers
 
 When reading an e2e-test change, the questions to ask:
 
-1. **Does this test prove something cross-process?** If the
-   behaviour fits in one process (handler → service → repo),
-   integration is cheaper and gives a better stack trace on failure.
+1. **Does this test prove something cross-service?** If the behaviour
+   fits in one service (handler → service → repo, or a single saga
+   participant), integration or unit is cheaper and gives a better
+   stack trace on failure.
 2. **Are tokens extracted from real mail?** A test that pre-computes
-   or reads from the DB is testing wiring at the wrong layer.
-3. **Is the assertion behavioural, not CSS-shaped?** Asserting
-   "the status div has class `err`" is fine. Asserting "the status
-   div has `display: none`" is testing browser defaults, not your
-   app — a CSS tweak silently invalidates it.
-4. **Does the test need its own harness, or can it ride in
-   `SubscribeSuite`?** A new harness costs ~3s of container startup.
-   `AuthSuite` exists because middleware-toggling demanded it;
-   future suites should justify themselves.
-5. **Are `route.Abort` / `SetBehavior` calls scoped to the test
-   that needs them?** Leaking into other tests via shared state
-   (the GH fixture map without `Reset`, a `page.Route` on a shared
-   context) is the most common flake source.
+   them or reads them from the DB is testing wiring at the wrong layer.
+3. **Does the assertion ride on observable behaviour?** The 200/404 on
+   the public endpoint and the captured email are the contract; a
+   detailed assertion on an intermediate saga state belongs in the
+   saga integration tests.
 
 ## What this layer deliberately doesn't cover
 
-- **Per-error-code mapping** on `POST /api/subscribe` — integration
-  suite.
-- **Response shape, filtering, pagination** on `GET
-  /api/subscriptions` — integration.
-- **Confirm/unsub token edge cases** (garbage, already-used,
-  idempotency) — integration.
-- **GET/POST parity** on unsubscribe — integration (handler concern).
-- **Branch logic of service / scanner / GitHub client / notifier** —
-  unit.
-- **SQL, migrations, GORM wiring** — integration.
-- **Cross-browser**, **visual regression**, **load** — explicit
-  non-goals.
+- **Per-error-code mapping** on the subscription API — integration.
+- **Pagination / filtering** on `GET /api/subscriptions` — integration.
+- **Confirm/unsubscribe token edge cases** (garbage, already-used) —
+  integration.
+- **Individual saga state transitions + compensation + recovery** —
+  the saga integration tests (real NATS + three Postgres) and the
+  coordinator unit tests.
+- **Catalog repository SQL, migrations, GORM wiring** — integration.
+- **Branch logic of the scanner / GitHub client / composer / notifier
+  classifier** — unit.
 
 ## When to add an e2e test
 
-Add one when behaviour can **only** be proven across processes:
+Add one when behaviour can **only** be proven across services and the
+broker:
 
-- A user-visible flow that spans browser → server → DB → mail and
-  back (lifecycle test is the archetype).
-- HTML/JS contract on the subscribe page that no API test catches.
-- Wiring of an external seam (auth middleware mount, base-URL
-  config) where a broken wire passes every unit + integration test
-  but fails the user.
+- A user-visible flow that spans orchestrator → broker → participants
+  → mail and back (`TestLifecycle` is the archetype).
+- Wiring of an external seam (stream/consumer setup, base-URL config)
+  where a broken wire passes every unit + integration test but fails
+  the user.
 
 Skip:
 
-- Endpoints already covered by integration with the right
-  side-effect asserts.
-- Error-code mapping — service unit tests are cheaper.
-- Anything the user never sees (background scanner runs, internal
-  caches).
+- Anything already covered by the saga integration tests with the
+  right side-effect asserts.
+- Error-code mapping — service / handler unit tests are cheaper.
+- Background scanner runs and other behaviour the user never sees.
 
 ## CI
 
 `.github/workflows/e2e-tests.yml`: `setup-go` → `go mod download` →
 `go test -tags=e2e -timeout=10m -count=1 ./tests/e2e/...`. testcontainers
-pulls Postgres, Mailpit, and `chromedp/headless-shell` at runtime on
-the ubuntu-latest Docker daemon.
+pulls Postgres, Mailpit, and NATS at runtime on the `ubuntu-latest`
+Docker daemon. On failure the harness dumps container logs into
+`tests/e2e/_artifacts/` for upload.

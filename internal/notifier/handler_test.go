@@ -24,7 +24,7 @@ func mustJSON(t *testing.T, c notify.EmailCommand) []byte {
 func TestHandlerSendsAndAcks(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	m := mocks.NewMockMailer(ctrl)
-	m.EXPECT().Send(gomock.Any(), "a@x.com", "Subj", "<p>hi</p>").Return(nil)
+	m.EXPECT().Send(gomock.Any(), notify.EmailCommand{RecipientEmail: "a@x.com", Subject: "Subj", HTMLBody: "<p>hi</p>"}).Return(nil)
 
 	h := NewHandler(m)
 	data := mustJSON(t, notify.EmailCommand{RecipientEmail: "a@x.com", Subject: "Subj", HTMLBody: "<p>hi</p>"})
@@ -36,7 +36,7 @@ func TestHandlerSendsAndAcks(t *testing.T) {
 func TestHandlerSendFailureIsTransient(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	m := mocks.NewMockMailer(ctrl)
-	m.EXPECT().Send(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("smtp down"))
+	m.EXPECT().Send(gomock.Any(), gomock.Any()).Return(errors.New("smtp down"))
 
 	h := NewHandler(m)
 	data := mustJSON(t, notify.EmailCommand{RecipientEmail: "a@x.com", Subject: "S", HTMLBody: "b"})

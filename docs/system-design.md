@@ -30,11 +30,13 @@ The topology and message contracts are specified in [`docs/microservices.md`](mi
 
 ## 3. SLOs & Capacity
 
+**Targets, not measurements** — no SLO instrumentation, error budget, or alerting is wired yet (§12); these are the design goals the system aims at, not figures observed in production.
+
 | Dimension | Target |
 |---|---|
 | API availability | 99.5% monthly |
 | API p99 latency | < 200 ms (excluding GitHub upstream calls) |
-| Notification latency | ≤ `SCAN_INTERVAL` + 60 s p95 |
+| Notification latency | ≈ one `SCAN_INTERVAL` + delivery |
 | Email delivery success | ≥ 99% (excluding hard bounces) |
 
 **Capacity envelope** (single Catalog instance, single `GITHUB_TOKEN`). The ceiling is set by the **Catalog scanner's** GitHub poll budget. With `R = 5 000 req/h` (GitHub authenticated limit), `I` = scan interval in minutes, `H = 0.8` headroom for subscribe-time validation calls (which also run through Catalog's GitHub client), and `E` = ETag-304 hit ratio, the maximum distinct tracked repos is `N = R × H / (1 − E) / (60 / I)`.
@@ -51,7 +53,7 @@ Subscribers scale independently (DB rows, SMTP fan-out). The ceiling is **distin
 
 ## 4. High-Level Architecture
 
-Four services, three databases, one broker. Subscribe enters at the **orchestrator** (`:8090`); confirm/unsubscribe enter at the **subscription** service (`:8080`); **catalog** and **notifier** expose only admin `/metrics`.
+Four services, three databases, one broker. Subscribe and confirm/unsubscribe all enter at the **orchestrator** (`:8090`) — confirm/unsubscribe are orchestrator-served HTML result pages that do the work over NATS request-reply to the **subscription** service. The subscription service's only public HTTP is the list API (`:8080`); **catalog** and **notifier** expose only admin `/metrics`.
 
 ```mermaid
 flowchart TB
@@ -60,10 +62,11 @@ flowchart TB
 
     subgraph ORCH["orchestrator :8090 — cmd/orchestrator"]
       Oco["coordinator + saga_log"]
+      Opg["confirm / unsubscribe result pages"]
     end
     subgraph SUB["subscription :8080 — cmd/app"]
-      SAPI["confirm / unsubscribe / list API"]
-      SH["saga create · release fan-out · confirmation · email composer"]
+      SAPI["list API"]
+      SH["saga create · release fan-out · confirmation · email composer · confirm/unsubscribe command handlers"]
     end
     subgraph CAT["catalog — cmd/catalog"]
       CH["register / release handlers"]
@@ -76,15 +79,16 @@ flowchart TB
     NATS{{"NATS + JetStream"}}
 
     User -->|"POST /subscribe"| Oco
-    User -->|"confirm / unsubscribe link"| SAPI
+    User -->|"confirm / unsubscribe link"| Opg
 
     Oco -->|"request-reply saga.catalog.*"| NATS
     Oco -->|"request-reply saga.subscription.create"| NATS
     Oco -->|"publish events.confirmation.requested"| NATS
+    Opg -->|"request-reply subscription.confirm / subscription.unsubscribe"| NATS
     NATS --> CH
     NATS --> SH
     SCAN -->|"publish events.release.detected"| NATS
-    SAPI -->|"publish events.subscription.removed"| NATS
+    SH -->|"publish events.subscription.removed (on unsubscribe)"| NATS
     SH -->|"publish notify.*"| NATS
     NATS --> NS
     NS --> SMTP
@@ -113,8 +117,8 @@ Each service is a `cmd/*/main.go` composition root (its only wiring point; no DI
 
 | Service | Binary / package | Public surface | Owns (Postgres) | Key deps |
 |---|---|---|---|---|
-| **orchestrator** | `cmd/orchestrator`, `internal/orchestrator` | HTTP `GET /` (form), `POST /subscribe`, `/health` (`:8090`) | `saga_log` — no business data | NATS (request-reply + publish) |
-| **subscription** | `cmd/app`, `internal/app` | HTTP confirm / unsubscribe / list (`:8080`) | `subscriptions`, `confirmation_tokens` | Postgres, NATS |
+| **orchestrator** | `cmd/orchestrator`, `internal/orchestrator` | HTTP `GET /` (form), `POST /subscribe`, confirm / unsubscribe result pages, `/health` (`:8090`) | `saga_log` — no business data | NATS (request-reply + publish) |
+| **subscription** | `cmd/app`, `internal/app` | HTTP list (`:8080`) + health; confirm / unsubscribe over NATS | `subscriptions`, `confirmation_tokens` | Postgres, NATS |
 | **catalog** | `cmd/catalog`, `internal/catalog` | admin `/metrics` only (`:9092`) | `watched_repos`, `repo_registrations` | Postgres, Redis, GitHub, NATS |
 | **notifier** | `cmd/notifier`, `internal/notifier` | admin `/metrics` only (`:9091`) | — (stateless) | NATS, SMTP |
 
@@ -124,7 +128,7 @@ Internal layering is the same `api` → `service` → `repository` → `db` shap
 |---|---|---|
 | **api** | `internal/{service}/api` | Gin routing, input parsing, domain-error → HTTP-status mapping. |
 | **service** | `internal/orchestrator/service`, `internal/app/service` | Business logic, validation, token generation, saga sequencing. Raises domain sentinel errors. |
-| **saga handlers** | `internal/app/saga`, `internal/catalog/saga` | The request-reply participants: `subscription.create` (the pivot), `catalog.register` / `catalog.release`. |
+| **saga handlers** | `internal/app/saga`, `internal/catalog/saga` | The request-reply participants: `subscription.create` (the pivot), `catalog.register` / `catalog.release`, plus the `subscription.confirm` / `subscription.unsubscribe` command handlers backing the orchestrator's result pages. |
 | **event consumers** | `internal/app/{releaseconsumer,confirmationconsumer}` | Consume `release.detected` (fan out one `notify.release` per recipient) and `confirmation.requested`. |
 | **repository** | `internal/{service}/repository` | SQL via GORM. No business logic. Returns ORM models. |
 | **db / migrations** | `internal/{service}/db` | Postgres connection + per-service forward-only migrations (golang-migrate). |
@@ -139,7 +143,7 @@ Internal layering is the same `api` → `service` → `repository` → `db` shap
 The scanner runs inside the **catalog** service (`internal/catalog/scanner`), fed the process context.
 
 - **Bounded fan-out.** Each tick processes repos through a worker pool of size `SCAN_CONCURRENCY` (default 8). One in-flight GitHub call per repo at a time.
-- **Per-call deadline.** Every GitHub request runs under `context.WithTimeout(GITHUB_TIMEOUT)` (default 10 s). A hung repo cannot stall the tick.
+- **Per-call deadline.** Every GitHub request is bounded by the client's `http.Client.Timeout` (`GITHUB_REQUEST_TIMEOUT`, default 10 s). A hung repo cannot stall the tick.
 - **Per-tick budget.** Total tick duration is bounded by `SCAN_INTERVAL`; if a tick exceeds `0.8 × SCAN_INTERVAL`, the next tick is skipped rather than queued.
 - **Detector, not address book.** The scanner reads `watched_repos` (active repos = those with ≥ 1 registration), advances the `last_seen_tag` cursor on a new tag, and **publishes one `release.detected` event** — it never reads subscriptions. The subscription service owns the subscriber list and fans out the per-recipient emails (§8.2).
 - **Panic isolation.** Each repo check is wrapped so one bad repo recovers and never kills the goroutine.
@@ -155,11 +159,13 @@ The scanner runs inside the **catalog** service (`internal/catalog/scanner`), fe
 - `subscriptions(id, public_id UUID, email, repo, confirmed, unsubscribe_token, created_at, updated_at)`
 - `confirmation_tokens(id, token, subscription_id FK ON DELETE CASCADE, created_at)`
 - `public_id` is the **orchestrator-minted UUID** — the cross-service identity that keys Catalog's registration and addresses unsubscribe. Unique indexes on `public_id` and on `(email, repo)`. Unsubscribe hard-deletes the row, so re-subscribe just inserts a fresh row (no soft-delete tombstone).
+- The confirmation token is **not** consumed on confirm — confirm is idempotent (it only re-sets `confirmed=true`), so prefetching scanners can't 404 the user's real click. One token row persists for the life of the subscription (1:1, bounded) and is reaped by the FK `ON DELETE CASCADE` when unsubscribe deletes the subscription.
 - The per-subscriber `last_seen_tag` cursor was **removed** — the release cursor now lives in Catalog, keyed per repo, not per subscription.
 
 **catalog** (`internal/catalog/db/migrations`)
 - `watched_repos(repo PK, last_seen_tag)` — the scan cursor.
 - `repo_registrations(subscription_id UUID PK, repo, created_at, FK → watched_repos(repo))` — one registration per subscription; a repo is polled while it has ≥ 1.
+- Release cleanup (on unsubscribe) deletes only the `repo_registrations` row; the `watched_repos` cursor row is **kept by design** so a re-subscribe reuses `last_seen_tag` and avoids re-notifying. Bounded by distinct repos, not a leak.
 
 **orchestrator** (`internal/orchestrator/db/migrations`)
 - `saga_log(saga_id UUID PK, state, subscription_id UUID, payload JSONB, last_error, created_at, updated_at)` — the durable record that drives crash recovery. A partial index on unfinished states (`state NOT IN ('DONE','ABORTED','COMPENSATED')`) keeps the recovery sweep cheap.
@@ -172,23 +178,25 @@ The scanner runs inside the **catalog** service (`internal/catalog/scanner`), fe
 
 The public HTTP surface is split across two services. Authoritative source: `swagger.yaml`.
 
-**orchestrator** (`:8090`) — the public front door for subscribe:
+**orchestrator** (`:8090`) — the public front door: subscribe, plus the confirm / unsubscribe pages reached from email links:
 
 | Method | Path | Purpose | Notable error mapping |
 |---|---|---|---|
 | `GET` | `/` | HTML subscription form (posts same-origin to `/subscribe`) | - |
 | `POST` | `/subscribe` | Run the subscribe saga (validate + register repo, create subscription, queue confirmation email) | 400 invalid repo, 404 repo missing, 409 duplicate, 503 GitHub rate-limited, 500 unmapped saga failure |
+| `GET` | `/confirm/:token` | Render a result page; confirm via NATS `subscription.confirm` (idempotent) | 404 token unknown |
+| `GET` | `/unsubscribe/:token` | Render a result page; unsubscribe via NATS `subscription.unsubscribe` | 404 token unknown |
+| `POST` | `/unsubscribe/:token` | RFC 8058 List-Unsubscribe-Post one-click (status only, no page); same NATS path | 404 token unknown |
 | `GET` | `/health` | Liveness | - |
 
-**subscription** (`:8080`) — confirm / unsubscribe / list, reached from email links:
+**subscription** (`:8080`) — the list API only; confirm / unsubscribe are performed via NATS command handlers (§5), not HTTP:
 
 | Method | Path | Purpose | Notable error mapping |
 |---|---|---|---|
-| `GET` | `/api/confirm/:token` | Set `confirmed=true`, delete token | 404 token unknown |
-| `GET` / `POST` | `/api/unsubscribe/:token` | Delete subscription, emit `subscription.removed` | 404 token unknown |
 | `GET` | `/api/subscriptions` | List active subs for an email (gated by `X-API-Key` when `API_KEY` set) | 400 invalid email, 401 bad/missing key |
+| `GET` | `/health` | Liveness | - |
 
-The stale single-binary `/api/subscribe` is **gone** — subscribe is now the orchestrator's `POST /subscribe`, and the form moved with it. `POST` on unsubscribe exists to satisfy RFC 8058 one-click unsubscribe headers in outgoing mail. Catalog and notifier expose no public HTTP — only admin `/metrics` (§12).
+The stale single-binary `/api/subscribe` is **gone** — subscribe is now the orchestrator's `POST /subscribe`, and the form moved with it. The old `/api/confirm` and `/api/unsubscribe` HTTP endpoints are gone too: the orchestrator now serves the result pages and drives the work over NATS request-reply (`subscription.confirm` / `subscription.unsubscribe`); the subscription service still publishes `events.subscription.removed` on unsubscribe. Confirm is **idempotent** — it re-sets `confirmed=true` and does not consume the token (prefetched links must not 404 the user's real click); the token is reaped by FK cascade when the subscription is deleted. `POST /unsubscribe/:token` exists to satisfy RFC 8058 one-click unsubscribe headers in outgoing mail. Catalog and notifier expose no public HTTP — only admin `/metrics` (§12).
 
 ---
 
@@ -233,7 +241,7 @@ sequenceDiagram
 - **register + create succeed** → `COMMITTED` → emit the confirmation event.
 - **Crash** → the `saga_log` recovery sweep (on boot + ticker) compensates before the pivot, rolls forward after it; the confirmation re-publish is deduplicated. An email is irreversible, so it lives strictly *after* the pivot.
 
-Confirm is a later, independent step: `GET /api/confirm/:token` on the subscription service looks up the token, flips `confirmed=true`, and deletes the token (one-shot).
+Confirm is a later, independent step: `GET /confirm/:token` on the orchestrator renders a result page and drives the work over NATS request-reply (`subscription.confirm`); the subscription service looks up the token and flips `confirmed=true`. It is **idempotent** and does **not** consume the token — email providers/scanners prefetch links, so a GET often arrives before the user, and deleting on first GET would 404 the real click. Re-hitting it is a no-op after the first. The token is reaped by the `confirmation_tokens` FK `ON DELETE CASCADE` when the subscription is deleted on unsubscribe; one row persists for the life of the subscription (bounded 1:1).
 
 ### 8.2 Scan + notify — event choreography
 
@@ -278,16 +286,19 @@ Deleting the subscription is the user's goal and is never rolled back; releasing
 ```mermaid
 sequenceDiagram
     participant Mail as Mail client
+    participant O as Orchestrator
     participant S as Subscription
     participant J as JetStream
     participant C as Catalog
 
-    Mail->>S: POST /api/unsubscribe/:token  (List-Unsubscribe-Post)
+    Mail->>O: POST /unsubscribe/:token  (List-Unsubscribe-Post)
+    O->>S: subscription.unsubscribe (req-reply)
     S->>S: delete by unsubscribe_token
     S--)J: publish events.subscription.removed
-    S-->>Mail: 200 OK
+    S-->>O: ok
+    O-->>Mail: 200 OK
     J-->>C: subscription.removed
-    C->>C: release registration (eventual cleanup)
+    C->>C: release registration — delete repo_registrations, keep watched_repos cursor (eventual cleanup)
 ```
 
 Between the delete and Catalog consuming the event, the scanner may poll a now-subscriberless repo once more — benign and self-healing (ADR-014).
@@ -309,7 +320,7 @@ Between the delete and Catalog consuming the event, the scanner may poll a now-s
 | Tag changes twice within one interval | Intermediate release is lost | Acceptable per current SLO. |
 | Scan duration > interval | Ticks pile up | Bound concurrency; alert on `scan_duration > 0.8 × SCAN_INTERVAL`. |
 
-Delivery is **at-least-once** over JetStream: a successful send is acked; a transient failure is `nak`'d and redelivered after `AckWait`; a permanent/exhausted failure is `term`'d and the `notify.*` consumer dead-letters to `NOTIFY_DLQ`. Publish-side dedup (`Nats-Msg-Id`) absorbs producer retries, so a rare duplicate — not loss — is the accepted tradeoff (ADR-013).
+Delivery is **at-least-once** over JetStream: a successful send is acked; a transient failure is `nak`'d and redelivered after `AckWait`; a permanent/exhausted failure is `term`'d and the `notify.*` consumer dead-letters to `NOTIFY_DLQ`. Publish-side dedup (`Nats-Msg-Id`) absorbs producer retries. The `NOTIFICATIONS` and `EVENTS` streams set a Duplicates window sized to exceed the consumer's worst-case redelivery span (`MaxDeliver 5 × AckWait 30s ≈ 150s`), so a redelivery's re-published messages stay deduped even when it lands late — delivery is **effectively-once within the retry window** rather than the rare duplicate the 2-minute JetStream default could let slip (ADR-013). The window is a flat 1 h — a generous margin over that ~150 s span, deliberately **not** a function of `SCAN_INTERVAL`: dedup must outlast the *redelivery* span (a delivery property), and tying it to the poll cadence would let a fast scan shrink it below that span and re-admit duplicates.
 
 ### 9.1 Cursor-advance vs. email-send ordering
 
@@ -325,7 +336,7 @@ The release path has two non-atomic side effects: persisting the repo's `last_se
 
 A crash between step 2 and step 3 loses *that* detection (the cursor moved without an event). This is bounded and rare, and intentional: a duplicate detection would fan out duplicate emails to every subscriber of that repo, and duplicate mail damages deliverability (spam-marks lower domain reputation for everyone). A missed release is still on the GitHub feed.
 
-**Subscription + notifier: at-least-once from the event onward.** Once `release.detected` lands in JetStream, the rest is durable: the subscription service consumes it, resolves confirmed subscribers, and publishes one `notify.release` per recipient onto the `NOTIFICATIONS` stream; the notifier delivers with ack/nak/term + DLQ (§9). Per-recipient messages mean one bad address retries and dead-letters on its own without affecting the rest, and `Nats-Msg-Id` dedup keeps producer retries idempotent. This is the at-least-once delivery the single-binary outbox proposal (ADR-006) was reaching for, now provided by the broker (ADR-013) — so the gap between cursor-advance and the durable event is the only at-most-once edge that remains.
+**Subscription + notifier: at-least-once from the event onward.** Once `release.detected` lands in JetStream, the rest is durable: the subscription service consumes it, resolves confirmed subscribers, and publishes one `notify.release` per recipient onto the `NOTIFICATIONS` stream; the notifier delivers with ack/nak/term + DLQ (§9). Per-recipient messages mean one bad address retries and dead-letters on its own without affecting the rest, and `Nats-Msg-Id` dedup keeps producer retries idempotent — the stream's Duplicates window is sized to exceed the consumer retry span (§9), so a late redelivery's re-publish is still suppressed (effectively-once within the retry window). This is the at-least-once delivery the single-binary outbox proposal (ADR-006) was reaching for, now provided by the broker (ADR-013) — so the gap between cursor-advance and the durable event is the only at-most-once edge that remains.
 
 ---
 
@@ -343,9 +354,9 @@ The services scale independently. The notifier and the subscription/orchestrator
 
 ## 11. Security & Privacy
 
-- **Tokens.** UUID v4, opaque (not signed). Separate confirm and unsubscribe tokens. Confirm tokens are one-shot and deleted on use. Unsubscribe tokens are long-lived (must survive in mail clients) and revoked when the subscription row is deleted. See ADR-005 for the full rationale, including future work (TTL/sweeper, constant-time compare, Referrer-Policy).
+- **Tokens.** UUID v4, opaque (not signed). Separate confirm and unsubscribe tokens. Confirm is idempotent and does **not** consume the token (link prefetching by scanners would otherwise 404 the user's real click); the token is reaped by FK cascade when the subscription is deleted. Unsubscribe tokens are long-lived (must survive in mail clients) and revoked when the subscription row is deleted. See ADR-005 for the full rationale, including future work (TTL/sweeper, constant-time compare, Referrer-Policy).
 - **Abuse / email-bombing - known gap.** `POST /subscribe` (on the orchestrator) is the only unauthenticated write endpoint that triggers an outbound side effect (confirmation mail to a user-supplied address). It is **not currently rate-limited.** The confirm-token TTL bounds unconfirmed-row growth, but does not stop an attacker from flooding a victim's inbox. If this becomes a real problem, the standard mitigations are a per-IP token bucket on subscribe, a per-email cooldown (independent of IP, returning the same response shape whether the mail was sent or suppressed), and a CAPTCHA on the HTML form.
-- **Auth.** The public subscribe (orchestrator) / confirm / unsubscribe (subscription) endpoints are intentionally open. Optional `X-API-Key` (constant-time compared) gates the subscription service's `/api/subscriptions` list. The saga is internal coordination behind one public endpoint; internal saga-failure details are never returned to the client (the orchestrator maps unmapped failures to a generic 500).
+- **Auth.** The public subscribe / confirm / unsubscribe endpoints (all on the orchestrator) are intentionally open. Optional `X-API-Key` (constant-time compared) gates the subscription service's `/api/subscriptions` list. The saga is internal coordination behind one public endpoint; internal saga-failure details are never returned to the client (the orchestrator maps unmapped failures to a generic 500).
 - **Broker network.** NATS runs **unauthenticated on the internal compose network** — the same posture as the previous internal hop (ADR-013). Broker accounts/credentials + TLS are the documented production upgrade. The saga commands and events never leave the internal network; there is no new external attack surface.
 - **Inputs.** `repo` matched against `^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$` before any external call. Email validated by `net/mail`.
 - **SQL.** Parameterized through GORM; no string-concatenated queries.
@@ -363,7 +374,7 @@ Detail in ADR-009 (structured logging), ADR-010 (log shipping), ADR-011 (RED met
 - **Correlation.** A **saga id** ties a subscribe across the orchestrator and both participants; every publish/send logs an **`event_id`**, so one release can be traced end-to-end across catalog → subscription → notifier in the log store. This is the cross-service substitute for a single binary's request-ID; distributed tracing (OpenTelemetry spans) is the documented next step.
 - **Metrics** (Prometheus, scraped from each service's `/metrics`). The notifier exposes `notify_messages_total{subject,outcome}` / `notify_send_duration_seconds` (admin `:9091`); catalog exposes scanner + GitHub metrics (admin `:9092`); the HTTP services expose RED metrics. Label cardinality is bounded - no label takes a user-controlled high-cardinality value (no email, no IP, no token, no full URL). **Grafana** serves a provisioned RED dashboard.
 - **Stuck work.** Visible as: sagas lingering in non-terminal `saga_log` states (`CATALOG_OK`, `SUBSCRIPTION_PENDING`, `COMMITTED`, `COMPENSATING` — a participant outage); JetStream consumer backlog; or messages parked in `NOTIFY_DLQ` (a bad address / malformed payload awaiting redrive).
-- **Alerts.** Pages on: scanner missed > 2 ticks, GitHub 429 rate > 5%/min, SMTP/notify failure rate > 5%/min, `NOTIFY_DLQ` non-empty, non-terminal sagas older than the recovery interval, DB connection saturation > 80%.
+- **Alerts (proposed — the intended policy; no alert rules are wired yet).** Page on: scanner missed > 2 ticks, GitHub 429 rate > 5%/min, SMTP/notify failure rate > 5%/min, `NOTIFY_DLQ` non-empty, non-terminal sagas older than the recovery interval, DB connection saturation > 80%.
 
 ---
 
@@ -396,18 +407,19 @@ All configuration is via environment variables (12-factor). No config files. Eac
 | orchestrator | `PORT` | `8090` | HTTP port (`/`, `/subscribe`). |
 | orchestrator | `SAGA_REQUEST_TIMEOUT` | `5s` | Per-command request-reply deadline. |
 | orchestrator | `SAGA_RECOVER_INTERVAL` | `30s` | Recovery-sweep ticker period. |
-| subscription | `PORT` | `8080` | HTTP port (confirm/unsubscribe/list). |
-| subscription | `BASE_URL` | `http://localhost:8080` | Origin used to build confirm/unsubscribe links in emails. |
+| subscription | `PORT` | `8080` | HTTP port (list API + health). |
+| subscription | `BASE_URL` | `http://localhost:8090` | Origin (the orchestrator's) used to build confirm/unsubscribe links in emails. |
 | subscription | `API_KEY` | unset | When set, gates `/api/subscriptions` via `X-API-Key`. |
 | catalog | `GITHUB_TOKEN` | unset | Without it, the scanner uses GitHub's 60 req/h unauthenticated limit. |
-| catalog | `SCAN_INTERVAL` | `5m` | Lower bound `1m`; upper bound `1h`. |
+| catalog | `SCAN_INTERVAL` | `5m` | Any positive duration; only negatives are rejected. |
 | catalog | `SCAN_CONCURRENCY` | `8` | Scanner worker-pool size per tick (§5.1). |
-| catalog | `GITHUB_TIMEOUT` | `10s` | Per-call deadline for GitHub requests (§5.1). |
+| catalog | `GITHUB_REQUEST_TIMEOUT` | `10s` | Per-request `http.Client` timeout for GitHub calls (§5.1). |
 | catalog | `REDIS_URL` | unset | When unset, the GitHub client runs without caching. |
 | catalog | `ADMIN_PORT` | `9092` | Admin `/metrics` port. |
 | notifier | `SMTP_*` | as above | The notifier owns the actual SMTP send. |
 | notifier | `ADMIN_ADDR` | `:9091` | Admin `/metrics` address. |
-| consumers | `CONSUMER_ACK_WAIT` / `CONSUMER_MAX_DELIVER` | `30s` / `5` | JetStream redelivery window + attempt cap before `term`/DLQ. |
+| app, catalog | `CONSUMER_ACK_WAIT` / `CONSUMER_MAX_DELIVER` | `30s` / `5` | JetStream redelivery window + attempt cap before `term`/DLQ. |
+| notifier | `NATS_ACK_WAIT` / `NATS_MAX_DELIVER` | `30s` / `5` | Same window/cap as above — the notifier reads differently-named keys. |
 
 **Proposed (referenced elsewhere in this doc, not yet wired):** `CONFIRM_TOKEN_TTL` (§11), `SUBSCRIBE_RATE_LIMIT` (§11).
 
@@ -416,7 +428,7 @@ All configuration is via environment variables (12-factor). No config files. Eac
 ## 15. Deployment & Runtime
 
 - **Image.** One multi-stage Dockerfile builds all **four binaries** (Go build → minimal runtime). See `Dockerfile`.
-- **Compose.** `docker-compose.yml` brings up the full stack for local dev: `nats`, `redis`, **three Postgres instances** (`db-subscription`, `db-catalog`, `db-orchestrator`), and the four services (`orchestrator`, `app`, `catalog`, `notifier`). Each service runs its own forward-only migrations on startup and waits on its dependencies' healthchecks. The orchestrator publishes `:8090`, the subscription service `:8080`; catalog/notifier expose only admin `/metrics`. The observability stack (Filebeat → Elasticsearch → Kibana, Prometheus + Grafana) lives in an overlay compose file (§12).
+- **Compose.** `docker-compose.yml` brings up the full stack for local dev: `nats`, `redis`, **three Postgres instances** (`db-subscription`, `db-catalog`, `db-orchestrator`), and the four services (`orchestrator`, `app`, `catalog`, `notifier`). Each service runs its own forward-only migrations on startup and waits on its dependencies' healthchecks. The orchestrator publishes `:8090` (subscribe + confirm/unsubscribe pages), the subscription service `:8080` (list API); catalog/notifier expose only admin `/metrics`. The observability stack (Filebeat → Elasticsearch → Kibana, Prometheus + Grafana) lives in an overlay compose file (§12).
 
   ```bash
   cp .env.example .env   # set SMTP_*

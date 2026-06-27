@@ -31,6 +31,10 @@ func (r *Repository) Register(ctx context.Context, subscriptionID, repo string) 
 	)
 }
 
+// Release drops only the registration, not the watched_repos cursor row: the repo
+// falls out of the scan set once its last registration is gone, and keeping the
+// cursor lets a re-subscribe resume from the last seen tag instead of re-notifying.
+// watched_repos is bounded by distinct repos, so this is intentional, not a leak.
 func (r *Repository) Release(ctx context.Context, subscriptionID string) error {
 	return r.db.WithContext(ctx).
 		Where("subscription_id = ?", subscriptionID).

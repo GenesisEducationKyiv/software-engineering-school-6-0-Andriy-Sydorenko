@@ -34,6 +34,12 @@ func TestSendConfirmationPublishesRenderedCommand(t *testing.T) {
 		if cmd.EventID == "" {
 			t.Fatal("event_id should be set for correlation")
 		}
+		if !strings.Contains(cmd.PlainBody, "/confirm/ctok") {
+			t.Fatalf("plain body missing confirm url: %q", cmd.PlainBody)
+		}
+		if cmd.Headers["List-Unsubscribe"] == "" {
+			t.Fatal("List-Unsubscribe header should be set")
+		}
 		return nil
 	})
 

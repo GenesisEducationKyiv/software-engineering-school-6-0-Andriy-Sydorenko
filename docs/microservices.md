@@ -4,7 +4,7 @@ The system is **four services from one Go module**, coordinated over a **NATS + 
 broker:
 
 - **orchestrator** (`cmd/orchestrator`) — drives the subscribe **saga**; owns a `saga_log`, no business data.
-- **subscription** (`cmd/app`) — subscriptions + tokens, email composition, confirm/unsubscribe API.
+- **subscription** (`cmd/app`) — subscriptions + tokens, email composition; confirm/unsubscribe over NATS commands; the list API.
 - **catalog** (`cmd/catalog`) — watched-repo registry + the release scanner; GitHub client + cache.
 - **notifier** (`cmd/notifier`) — stateless email delivery.
 
@@ -21,8 +21,8 @@ Distributed-transaction strategy (the saga): [ADR-014](adr/014-cross-service-tra
 
 | Unit | Owns (DB) | Public surface | External deps |
 |---|---|---|---|
-| **orchestrator** (`cmd/orchestrator`) | `saga_log` (own Postgres) — no business data | HTTP `POST /subscribe` | NATS (request-reply + publish) |
-| **subscription** (`cmd/app`) | `subscriptions`, `confirmation_tokens` + email composition (templates/links) | HTTP confirm / unsubscribe / list | Postgres, NATS |
+| **orchestrator** (`cmd/orchestrator`) | `saga_log` (own Postgres) — no business data | HTTP `POST /subscribe` + confirm / unsubscribe result pages | NATS (request-reply + publish) |
+| **subscription** (`cmd/app`) | `subscriptions`, `confirmation_tokens` + email composition (templates/links) | HTTP list API (confirm / unsubscribe handled over NATS) | Postgres, NATS |
 | **catalog** (`cmd/catalog`) | `watched_repos`, `repo_registrations` | NATS handlers (+ admin `/metrics`) | Postgres, Redis (cache), GitHub API, NATS |
 | **notifier** (`cmd/notifier`) | — (stateless) | NATS subscription (+ admin `/metrics`) | NATS, SMTP |
 
@@ -32,7 +32,9 @@ Two NATS styles, by job:
 
 - **Core NATS request-reply** carries the **saga commands + compensation** — the
   orchestrator needs an immediate ok/fail reply to decide commit-vs-compensate:
-  `saga.catalog.register` / `saga.catalog.release` and `saga.subscription.create`.
+  `saga.catalog.register` / `saga.catalog.release` and `saga.subscription.create`. The
+  orchestrator's confirm/unsubscribe pages use the same style (`subscription.confirm` /
+  `subscription.unsubscribe`) — direct commands, not saga steps (nothing to compensate).
 - **JetStream** carries the durable, fire-and-forget **events + emails**:
   `events.release.detected`, `events.subscription.removed`, `events.confirmation.requested`
   (stream `EVENTS`), and `notify.confirmation` / `notify.release` (stream `NOTIFICATIONS`,
@@ -45,10 +47,11 @@ flowchart TB
   Client([User])
   subgraph ORCH["cmd/orchestrator"]
     CO["coordinator<br/>+ saga_log"]
+    PG["confirm / unsubscribe<br/>result pages"]
   end
   subgraph SUB["cmd/app — subscription"]
-    API["confirm / unsubscribe API"]
-    SH["saga create<br/>+ release/confirmation consumers<br/>+ email composer"]
+    API["list API"]
+    SH["saga create<br/>+ confirm/unsubscribe handlers<br/>+ release/confirmation consumers<br/>+ email composer"]
   end
   subgraph CAT["cmd/catalog"]
     CH["register/release handlers"]
@@ -62,17 +65,18 @@ flowchart TB
   SMTP[("SMTP")]
 
   Client -->|"POST /subscribe"| CO
-  Client -->|"confirm / unsubscribe"| API
+  Client -->|"confirm / unsubscribe"| PG
   CO -->|"request-reply saga.catalog.*"| NATS
   CO -->|"request-reply saga.subscription.*"| NATS
   CO -->|"publish confirmation.requested"| NATS
+  PG -->|"request-reply subscription.confirm / .unsubscribe"| NATS
   NATS --> CH
   NATS --> SH
   CH -->|ValidateRepo| GH
   SCAN -->|GetLatestRelease| GH
   SCAN -->|"publish release.detected"| NATS
   SH -->|"publish notify.*"| NATS
-  API -->|"publish subscription.removed"| NATS
+  SH -->|"publish subscription.removed (on unsubscribe)"| NATS
   NATS --> NS
   NS -->|send| SMTP
 ```
@@ -106,9 +110,14 @@ keeps `register` / `release` and `create` **idempotent** under retries and recov
 
 ## Other flows
 
-- **Confirm / unsubscribe** — local DB writes on the subscription service over synchronous
-  HTTP. Unsubscribe additionally emits `events.subscription.removed`; Catalog consumes it
-  and releases the registration (eventual cleanup, **not a saga** — ADR-014).
+- **Confirm / unsubscribe** — the orchestrator serves the result pages and drives the work
+  over NATS request-reply (`subscription.confirm` / `subscription.unsubscribe`); the
+  subscription service does the local DB write. Confirm is **idempotent** and does not
+  consume the token (link prefetching would otherwise 404 the real click); the token is
+  reaped by FK cascade on delete. Unsubscribe additionally emits
+  `events.subscription.removed`; Catalog consumes it and releases the registration —
+  deleting the `repo_registrations` row but **keeping** the `watched_repos` cursor so a
+  re-subscribe reuses `last_seen_tag` (eventual cleanup, **not a saga** — ADR-014).
 - **Scan cycle** (every `SCAN_INTERVAL`, in Catalog) — poll active repos → on a new tag,
   advance the cursor and **publish one `release.detected`**. The subscription service
   consumes it, resolves confirmed subscribers, and fans out one `notify.release` per
@@ -122,7 +131,9 @@ keeps `register` / `release` and `create` **idempotent** under retries and recov
 - **Events + emails**: JetStream **at-least-once** with a durable file-backed buffer. Ack
   after success; transient failure → `nak` → redeliver after `AckWait`; permanent / exhausted
   → `term`. The `notify.*` consumer additionally dead-letters to `NOTIFY_DLQ`. Publish dedup
-  via `Nats-Msg-Id` absorbs retries.
+  via `Nats-Msg-Id` absorbs retries; the `NOTIFICATIONS` / `EVENTS` Duplicates window is
+  sized to exceed the consumer retry span (`MaxDeliver 5 × AckWait 30s ≈ 150s`), so a late
+  redelivery's re-publish is still suppressed — **effectively-once within the retry window**.
 - A consumer outage **delays** delivery, it doesn't lose it; clients reconnect indefinitely.
 
 NATS runs unauthenticated on the compose network (same posture as ADR-013); accounts/creds
@@ -141,8 +152,8 @@ NATS runs unauthenticated on the compose network (same posture as ADR-013); acco
 
 One multi-stage Dockerfile builds all four binaries; `docker-compose.yml` runs them
 alongside `nats`, `redis`, and **three Postgres instances** (`db-subscription`,
-`db-catalog`, `db-orchestrator`). The orchestrator serves `POST /subscribe` on `:8090`;
-the subscription service serves the confirm/unsubscribe API on `:8080`; catalog + notifier
+`db-catalog`, `db-orchestrator`). The orchestrator serves `POST /subscribe` and the confirm/unsubscribe pages on `:8090`;
+the subscription service serves the list API on `:8080`; catalog + notifier
 expose only admin `/metrics`.
 
 ```bash

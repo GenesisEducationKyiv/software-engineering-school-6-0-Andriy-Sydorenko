@@ -16,8 +16,6 @@ import (
 	catalogrepo "github.com/Andriy-Sydorenko/repo-release-notifier/internal/catalog/repository"
 )
 
-// newCatalogRepo starts a dedicated Postgres with the Catalog schema — the Catalog
-// service owns its own database, so its tests don't share the app harness DB.
 func newCatalogRepo(t *testing.T) *catalogrepo.Repository {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -49,20 +47,20 @@ func openCatalogWithRetry(dsn string, attempts int, delay time.Duration) (*gorm.
 	var lastErr error
 	for i := 0; i < attempts; i++ {
 		db, err := catalogdb.NewPostgres(cfg)
-		if err == nil {
-			if sqlDB, e := db.DB(); e == nil && sqlDB.Ping() == nil {
-				return db, nil
-			}
-		} else {
+		if err != nil {
 			lastErr = err
+		} else if sqlDB, e := db.DB(); e != nil {
+			lastErr = fmt.Errorf("db handle: %w", e)
+		} else if e := sqlDB.Ping(); e != nil {
+			lastErr = fmt.Errorf("ping: %w", e)
+		} else {
+			return db, nil
 		}
 		time.Sleep(delay)
 	}
 	return nil, fmt.Errorf("connect catalog db: %w", lastErr)
 }
 
-// TestCatalogRegister_IsIdempotent is the participant contract: register/release
-// keyed by subscription_id must apply exactly once under retries (saga recovery).
 func TestCatalogRegister_IsIdempotent(t *testing.T) {
 	repo := newCatalogRepo(t)
 	ctx := context.Background()

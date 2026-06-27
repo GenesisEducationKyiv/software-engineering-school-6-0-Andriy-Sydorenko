@@ -23,7 +23,7 @@ func LoadConfig() *Config {
 
 func (c *Config) Validate() error {
 	if c.RequestTimeout <= 0 {
-		return fmt.Errorf("github config: GITHUB_TIMEOUT must be > 0, got %s", c.RequestTimeout)
+		return fmt.Errorf("github config: GITHUB_REQUEST_TIMEOUT must be > 0, got %s", c.RequestTimeout)
 	}
 	return nil
 }

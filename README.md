@@ -126,15 +126,17 @@ compensate before the pivot, roll forward after it.
 
 ### Confirm / Unsubscribe
 
-`GET /api/confirm/:token` looks up the confirmation token, sets
-`confirmed = true` on the associated subscription, and deletes the
-token row. One-shot.
+The confirm and unsubscribe links in emails point at the **orchestrator**
+(`:8090`), which serves an HTML result page and performs the action over
+NATS request-reply to the subscription service.
 
-`GET /api/unsubscribe/:token` looks the subscription up by its
-unsubscribe token and deletes it. `POST /api/unsubscribe/:token`
-is the same handler — exposed as POST too so the one-click
-unsubscribe header in outgoing mail works natively in Gmail and
-Apple Mail.
+`GET /confirm/:token` confirms the subscription. It is **idempotent** — email
+scanners prefetch links, so re-hitting it just re-confirms; the token is not
+consumed, and is reaped by FK cascade when the subscription is deleted.
+
+`GET /unsubscribe/:token` deletes the subscription; `POST /unsubscribe/:token`
+is the same action exposed for the RFC 8058 one-click `List-Unsubscribe`
+header (Gmail, Apple Mail).
 
 ### Scanner
 
@@ -234,8 +236,8 @@ with three things worth mentioning:
 - **`List-Unsubscribe` + `List-Unsubscribe-Post` headers** so
   Gmail, Apple Mail, Outlook and Yahoo render a native
   "Unsubscribe" button in the UI. One POST from the client to
-  `/api/unsubscribe/:token` (we accept both GET and POST) and the
-  subscription is gone.
+  `/unsubscribe/:token` on the orchestrator (we accept both GET and
+  POST) and the subscription is gone.
 - **Unsubscribe link in the confirmation email**, not only in
   release notifications. If someone subscribes you without
   consent, you shouldn't have to wait for a release to get out.

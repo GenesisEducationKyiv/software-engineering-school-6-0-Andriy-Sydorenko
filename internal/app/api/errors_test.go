@@ -35,9 +35,9 @@ func decodeError(t *testing.T, w *httptest.ResponseRecorder) domain.ErrorRespons
 // wrapped-sentinel matching and unmapped-error sanitization.
 
 func TestWriteErrorMatchesWrappedSentinels(t *testing.T) {
-	wrapped := fmt.Errorf("repo layer: %w", domain.ErrAlreadySubscribed)
+	wrapped := fmt.Errorf("service layer: %w", domain.ErrInvalidEmail)
 	w := invokeWriteError(t, wrapped)
-	assert.Equal(t, http.StatusConflict, w.Code, "wrapped sentinel must match via errors.Is")
+	assert.Equal(t, http.StatusBadRequest, w.Code, "wrapped sentinel must match via errors.Is")
 }
 
 func TestWriteErrorSanitizesUnmappedErrors(t *testing.T) {

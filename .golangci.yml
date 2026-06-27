@@ -67,6 +67,11 @@ linters:
         - performance
       disabled-checks:
         - unnecessaryBlock
+      settings:
+        hugeParam:
+          # EmailCommand (the email DTO) is 88 bytes and is passed by value by
+          # design through the publisher/mailer; keep the copy threshold above it.
+          sizeThreshold: 128
     errcheck:
       exclude-functions:
         - (io.Closer).Close

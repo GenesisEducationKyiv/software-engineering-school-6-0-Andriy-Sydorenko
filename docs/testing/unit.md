@@ -29,12 +29,11 @@ The confirm/unsubscribe/list service plus its email composition.
 
 - **`service`** — the orchestration layer between handlers and
   repositories.
-  - `ConfirmSubscription` runs find-token → confirm → delete-token in
-    order; an empty/unknown token is rejected before any DB call; a
-    **confirm failure aborts before the token delete** (no partial
-    success); a **delete-token failure is swallowed** (cleanup is
-    best-effort — a transient blip must not turn a valid confirmation
-    into a 500).
+  - `ConfirmSubscription` is **idempotent and does not consume the
+    token** — find-token → confirm, with no delete (email scanners
+    prefetch the link, so deleting on the first GET would 404 the
+    user's real click); an empty/unknown token is rejected before any
+    DB call; a confirm failure propagates.
   - `Unsubscribe` deletes the row and publishes the
     `subscription.removed` cleanup event; the **event-publish failure
     is swallowed** (logged, never a 5xx); a delete failure propagates
@@ -51,8 +50,9 @@ The confirm/unsubscribe/list service plus its email composition.
     with a non-empty `event_id` (publish→consume correlation) and the
     release dedup id. *(gomock: `Publisher`.)*
 - **`api`** — handlers + middleware, service mocked.
-  - Confirm / unsubscribe / list map to the right status codes (200 /
-    404 / 400); the unsubscribe token passes through verbatim.
+  - Only the **list** endpoint lives here now (confirm/unsubscribe
+    moved to the orchestrator). `GetSubscriptions` maps to the right
+    status codes (200 list / 200 empty / 400 invalid email).
     *(gomock: `Service`.)*
   - `writeError` maps **wrapped** sentinels via `errors.Is` and
     **sanitizes unmapped errors** (never leaks internal text to the
@@ -117,9 +117,17 @@ machine** with mocked participants + a recording store — see the
 [integration suite](integration.md) for the same machine over real
 NATS. The `api` package adds:
 
-- **`api`** — `GET /` serves the subscribe form, and the form posts
-  **same-origin to `/subscribe`** (locks in the fix for a stale
-  `/api/subscribe` target that once orphaned it).
+- **`api`** — the orchestrator's HTTP surface, which now owns
+  subscribe **and** the confirm/unsubscribe HTML pages.
+  - `TestSubscribePageServed` — `GET /` serves the subscribe form, and
+    the form posts **same-origin to `/subscribe`** (locks in the fix
+    for a stale `/api/subscribe` target that once orphaned it).
+  - `TestSubscribe_StatusMapping` — `POST /subscribe` maps the saga
+    outcome to status codes: 200 / 400 (bad json/email/repo) / 404 /
+    409 / 503 / 500.
+  - `TestConfirmPage` / `TestUnsubscribePage` — the confirm/unsubscribe
+    pages render and map an unknown token to 404 (these used to be
+    subscription-service endpoints).
 
 ### `internal/notifier` — stateless delivery
 
@@ -219,7 +227,7 @@ excluded by build tag, so neither compiles in the unit run.
 
 - **gomock strictness is the assertion.** Omitting an `EXPECT()`
   asserts that method must not be called — the saga and service tests
-  rely on it (e.g. "confirm failure ⟹ delete-token never called",
+  rely on it (e.g. "delete failure ⟹ no `subscription.removed` event",
   "bad repo ⟹ no create, no compensation"). Don't add permissive
   matchers without a reason.
 - **Exact-match args** when the value catches a real bug (the

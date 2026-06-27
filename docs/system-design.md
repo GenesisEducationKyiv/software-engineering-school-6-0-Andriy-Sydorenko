@@ -135,7 +135,7 @@ Internal layering is the same `api` → `service` → `repository` → `db` shap
 | **domain** | `internal/{service}/domain` | Leaf types + sentinel errors; imports nothing else (no cycles). |
 | **GitHub client** | `internal/catalog/github` | Authenticated REST calls; rate-limit detection; optional Redis cache wrapper (`internal/catalog/cache`). |
 | **scanner** | `internal/catalog/scanner` | Ticker-driven goroutine; polls active repos; publishes `release.detected` (§5.1). |
-| **notifier** | `internal/notifier` | Stateless JetStream consumer → SMTP. Email templates + `List-Unsubscribe` headers live in the **subscription** service (`internal/app/templates`), which pre-renders; the notifier only delivers. |
+| **notifier** | `internal/notifier` | Stateless JetStream consumer → SMTP. The **subscription** service composes the email (HTML templates in `internal/app/templates`, plaintext + `List-Unsubscribe` headers in `internal/app/service`) and ships them in the `EmailCommand`; the notifier assembles the multipart MIME and delivers. |
 | **shared** | `internal/shared/{saga,notify,natsbus,config,observability}` | Cross-service message contracts + subjects, the NATS connect/stream/request-reply helpers, env config, structured slog. |
 
 ### 5.1 Scanner concurrency contract (catalog)

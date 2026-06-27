@@ -34,8 +34,9 @@ DB side-effects with the external boundaries (GitHub, SMTP) stubbed.
   subscription service renders the email and publishes
   `notify.confirmation`, the notifier delivers it to Mailpit. The
   confirm/unsubscribe tokens are then pulled **out of the captured
-  email body** and replayed against the subscription API. Unit can't
-  test the loop (it's not cross-service); integration stubs the mailer.
+  email body** and replayed against the orchestrator's `/confirm` /
+  `/unsubscribe` pages. Unit can't test the loop (it's not
+  cross-service); integration stubs the mailer.
 - **Real SMTP + real MIME.** The notifier sends through a real
   `SMTPMailer` to Mailpit, which parses the MIME back on receipt. A
   malformed body is rejected by Mailpit — proving the wire format
@@ -60,16 +61,20 @@ bug class.
 ### `SubscribeSuite` (`tests/e2e/subscribe_test.go`)
 
 Drives the orchestrator's public `POST /subscribe` and verifies state
-**through behavior** — the captured email and the one-shot tokens —
-not DB reads (those are the integration tier's job).
+**through behavior** — the captured email and the token replays
+(confirm is idempotent, the unsubscribe token is one-shot) — not DB
+reads (those are the integration tier's job).
 
 - **`TestLifecycle`** — the full happy path across all four services.
   `POST /subscribe` (200) → poll Mailpit for the real confirmation
   email → extract the confirm + unsubscribe tokens from the body →
-  `GET /api/confirm/:t` (200) → `GET /api/unsubscribe/:t` (200) →
+  `GET /confirm/:t` (200) → `GET /confirm/:t` **again** (200, proving
+  confirm is idempotent / prefetch-safe — a scanner's first GET must
+  not 404 the user's real click) → `GET /unsubscribe/:t` (200) →
   replay the unsubscribe token (must **not** be 200, proving it's
-  one-shot). This is the case the harness exists to make possible — no
-  cheaper layer can run it.
+  one-shot). All paths are bare `/confirm` / `/unsubscribe` on the
+  **orchestrator** (no `/api` prefix). This is the case the harness
+  exists to make possible — no cheaper layer can run it.
 - **`TestBadRepo_AbortsWithNoEmail`** — stages the GitHub fixture to
   return 404 for the owner (`GitHub.SetBehavior("ghost", GHNotFound)`),
   then subscribes. Asserts `POST /subscribe` returns 404 **and** the
@@ -80,8 +85,8 @@ not DB reads (those are the integration tier's job).
 
 | Layer | Real | Fixture |
 |---|---|---|
-| Orchestrator (`POST /subscribe`, coordinator, `saga_log`) | ✓ | |
-| Subscription service (saga create, confirm/unsubscribe API, email composer) | ✓ | |
+| Orchestrator (`POST /subscribe`, `/confirm` + `/unsubscribe` pages, coordinator, `saga_log`) | ✓ | |
+| Subscription service (saga create, list API, email composer) | ✓ | |
 | Catalog (register/release participants) | ✓ | |
 | Notifier (JetStream consumer → real SMTP send) | ✓ | |
 | NATS + JetStream (testcontainers, streams provisioned) | ✓ | |
@@ -102,8 +107,8 @@ in-process services; cleanup is registered with `t.Cleanup`.
 | Field / method | Purpose |
 |---|---|
 | `New(t, opts...)` | Boots NATS + Mailpit + three Postgres + the GH fixture, wires all four services in-process, returns `*Harness`. |
-| `OrchestratorURL` | Orchestrator HTTP root (`POST /subscribe`) |
-| `AppURL` | Subscription service HTTP root (confirm / unsubscribe / list) |
+| `OrchestratorURL` | Orchestrator HTTP root (`POST /subscribe`, `/confirm` + `/unsubscribe` pages) |
+| `AppURL` | Subscription service HTTP root (list) |
 | `MailpitURL` | Mailpit HTTP API root |
 | `SubDB` / `CatDB` / `OrchDB` | `*gorm.DB` per service for direct row inspection |
 | `GitHub` | `*GitHubFixture` — `SetBehavior(owner, b)`, `Reset()` |
@@ -137,9 +142,9 @@ tests/e2e/
   (`nats:2.10-alpine`, `-js` for JetStream) via generic containers.
 - **In-process services**: orchestrator + subscription expose HTTP on
   ephemeral `127.0.0.1` ports; catalog + notifier run as broker
-  consumers. The subscription app URL is resolved *before* the email
-  composer is wired, so confirm/unsubscribe links point at the live
-  listener.
+  consumers. The orchestrator URL is resolved *before* the email
+  composer is wired, so the confirm/unsubscribe links it embeds point
+  at the live orchestrator listener.
 - **Suite framework**: `testify/suite` — `harness.BaseSuite` owns one
   Harness per suite.
 - **Assertions**: `testify/require` — hard-fail; polling with
@@ -162,10 +167,12 @@ stays container-free.
 ## Conventions
 
 - **State is verified through behavior, not DB reads.** Tokens come
-  from the real captured email (`WaitForMail`); the one-shot property
-  is proven by replaying the token, not by querying the row. The
-  bad-repo test is the one exception — it asserts zero rows to prove
-  the saga left no trace.
+  from the real captured email (`WaitForMail`); replaying the token
+  proves the contract — confirm is **idempotent** (the second GET
+  still 200s, prefetch-safe), the unsubscribe token is **one-shot**
+  (the replay is not 200) — not by querying the row. The bad-repo test
+  is the one exception — it asserts zero rows to prove the saga left no
+  trace.
 - **`SetBehavior` is per-test.** `BaseSuite.SetupTest` calls
   `GitHub.Reset()` so behavior overrides don't leak between tests.
 - **Hand-rolled fixtures only at the upstream boundary.** GitHub is
@@ -190,8 +197,9 @@ When reading an e2e-test change, the questions to ask:
 
 - **Per-error-code mapping** on the subscription API — integration.
 - **Pagination / filtering** on `GET /api/subscriptions` — integration.
-- **Confirm/unsubscribe token edge cases** (garbage, already-used) —
-  integration.
+- **Confirm/unsubscribe token edge cases** (garbage, unknown) — unit
+  (subscription service token rejection + the orchestrator's 404
+  page mapping).
 - **Individual saga state transitions + compensation + recovery** —
   the saga integration tests (real NATS + three Postgres) and the
   coordinator unit tests.

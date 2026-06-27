@@ -56,20 +56,13 @@ error).
 ### Subscription HTTP API — real Postgres (`api_test.go`)
 
 HTTP → service → repository → Postgres for the subscription service's
-own endpoints (the confirm / unsubscribe / list surface that stayed
-behind when subscribe moved to the orchestrator). The subscribe flow
-itself is no longer an endpoint here, so tests seed the unconfirmed
-subscription + token directly (`seedSubscription`) — standing in for
-what the saga writes.
+own endpoints (the **list** surface that stayed behind — confirm /
+unsubscribe moved to the orchestrator and are now covered at e2e). The
+subscribe flow itself is no longer an endpoint here, so tests seed the
+unconfirmed subscription + token directly (`seedSubscription`) —
+standing in for what the saga writes.
 
 - **`TestHealth`** — `/health` returns `{"status":"ok"}`.
-- **`TestConfirmFlow`** — confirm flips `confirmed = true` **and**
-  deletes the token row (single-use cleanup).
-- **`TestConfirmUnknownToken`** — unknown token → 404.
-- **`TestUnsubscribeGET`** — GET unsubscribe hard-deletes the row.
-- **`TestUnsubscribePOSTOneClick`** — RFC 8058 one-click POST is
-  token-only, unauthenticated, 200.
-- **`TestUnsubscribeUnknownToken`** — unknown token → 404.
 - **`TestGetSubscriptions`** — list is scoped to the queried email (no
   cross-email leak), returns the right count.
 - **`TestGetSubscriptionsRequiresAPIKey`** — missing `X-API-Key` → 401.
@@ -167,7 +160,7 @@ test ./...` compiles neither tagged tree.
 ```
 tests/integration/
   harness_test.go            shared subscription Postgres bootstrap + newTestEnv + truncate
-  api_test.go                subscription confirm/unsubscribe/list endpoint tests
+  api_test.go                subscription health + list endpoint tests
   saga_test.go               saga over real NATS + three Postgres (happy / abort / compensate / recover)
   catalog_repository_test.go catalog repo bootstrap + Register/Release idempotency
   catalog_cursor_test.go     watched-repo upsert (scanner cursor)

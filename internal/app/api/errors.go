@@ -20,23 +20,6 @@ type httpView struct {
 // internal (500) and their text is never returned to the client.
 var errorView = map[error]httpView{
 	domain.ErrInvalidEmail: {http.StatusBadRequest, "invalid email format"},
-	domain.ErrInvalidRepoFormat: {
-		http.StatusBadRequest,
-		"invalid repository format, expected owner/repo",
-	},
-	domain.ErrRepoNotFound: {
-		http.StatusNotFound,
-		"repository not found on GitHub or is private",
-	},
-	domain.ErrTokenNotFound: {http.StatusNotFound, "token not found"},
-	domain.ErrAlreadySubscribed: {
-		http.StatusConflict,
-		"email already subscribed to this repository",
-	},
-	domain.ErrRateLimited: {
-		http.StatusServiceUnavailable,
-		"service temporarily unavailable, try again later",
-	},
 }
 
 func writeError(c *gin.Context, op string, err error) {

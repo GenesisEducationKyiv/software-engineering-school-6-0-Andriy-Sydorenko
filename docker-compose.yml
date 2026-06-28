@@ -1,20 +1,48 @@
 services:
-  db:
+  db-subscription:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-release_notifier}
+      POSTGRES_DB: subscription
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata-subscription:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-release_notifier}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d subscription"]
       interval: 5s
       timeout: 3s
       retries: 10
-    ports:
-      - "${DB_PORT:-5432}:5432"
+
+  db-catalog:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: catalog
+    volumes:
+      - pgdata-catalog:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d catalog"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  db-orchestrator:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: orchestrator
+    volumes:
+      - pgdata-orchestrator:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d orchestrator"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   redis:
     image: redis:7-alpine
@@ -37,36 +65,81 @@ services:
     ports:
       - "${NATS_PORT:-4222}:4222"
 
+  orchestrator:
+    build:
+      context: .
+      target: orchestrator
+    restart: unless-stopped
+    depends_on:
+      db-orchestrator:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    environment:
+      DB_HOST: db-orchestrator
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_NAME: orchestrator
+      DB_SSLMODE: disable
+      PORT: 8090
+      NATS_URL: nats://nats:4222
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    ports:
+      - "${ORCHESTRATOR_PORT:-8090}:8090"
+
   app:
     build:
       context: .
       target: app
     restart: unless-stopped
     depends_on:
-      db:
+      db-subscription:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    environment:
+      DB_HOST: db-subscription
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_NAME: subscription
+      DB_SSLMODE: disable
+      PORT: 8080
+      NATS_URL: nats://nats:4222
+      API_KEY: ${API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    ports:
+      - "${PORT:-8080}:8080"
+
+  catalog:
+    build:
+      context: .
+      target: catalog
+    restart: unless-stopped
+    depends_on:
+      db-catalog:
         condition: service_healthy
       redis:
         condition: service_healthy
       nats:
         condition: service_healthy
     environment:
-      DB_HOST: db
+      DB_HOST: db-catalog
       DB_PORT: 5432
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
-      DB_NAME: ${DB_NAME:-release_notifier}
+      DB_NAME: catalog
       DB_SSLMODE: disable
-      PORT: 8080
-      BASE_URL: ${BASE_URL:-http://localhost:8080}
+      ADMIN_PORT: 9092
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       NATS_URL: nats://nats:4222
       SCAN_INTERVAL: ${SCAN_INTERVAL:-5m}
-      API_KEY: ${API_KEY:-}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: ${LOG_FORMAT:-json}
-    ports:
-      - "${PORT:-8080}:8080"
 
   notifier:
     build:
@@ -76,15 +149,16 @@ services:
     depends_on:
       nats:
         condition: service_healthy
+    env_file:
+      - path: .env.notifier
+        required: false
     environment:
       NATS_URL: nats://nats:4222
       ADMIN_ADDR: ":9091"
-      SMTP_HOST: ${SMTP_HOST}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USERNAME: ${SMTP_USERNAME}
-      SMTP_PASSWORD: ${SMTP_PASSWORD}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: ${LOG_FORMAT:-json}
 
 volumes:
-  pgdata:
+  pgdata-subscription:
+  pgdata-catalog:
+  pgdata-orchestrator:

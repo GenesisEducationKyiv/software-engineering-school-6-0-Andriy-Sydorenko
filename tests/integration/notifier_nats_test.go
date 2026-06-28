@@ -27,13 +27,13 @@ type recordingMailer struct {
 	fail bool
 }
 
-func (m *recordingMailer) Send(_ context.Context, to, _, _ string) error {
+func (m *recordingMailer) Send(_ context.Context, msg notify.EmailCommand) error {
 	if m.fail {
 		return errors.New("smtp down")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.sent = append(m.sent, to)
+	m.sent = append(m.sent, msg.RecipientEmail)
 	return nil
 }
 

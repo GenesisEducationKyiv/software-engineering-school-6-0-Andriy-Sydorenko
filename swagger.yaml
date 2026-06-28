@@ -4,10 +4,11 @@ info:
   version: "1.0.0"
   title: "GitHub Release Notification API"
 host: "releases-api.app"
-basePath: "/api"
 tags:
+  - name: "orchestrator"
+    description: "Public front door (:8090) — subscribe + confirm/unsubscribe pages"
   - name: "subscription"
-    description: "Subscription management operations"
+    description: "Subscription service (:8080) — list API (/api prefix)"
 schemes:
   - "http"
   - "https"
@@ -15,9 +16,9 @@ paths:
   /subscribe:
     post:
       tags:
-        - "subscription"
+        - "orchestrator"
       summary: "Subscribe to release notifications"
-      description: "Subscribe an email to receive notifications about new releases of a GitHub repository. The repository is validated via GitHub API."
+      description: "Orchestrator (:8090). Runs the subscribe saga: validate + register the repo on GitHub, create the subscription, queue the confirmation email."
       operationId: "subscribe"
       consumes:
         - "application/json"
@@ -42,9 +43,9 @@ paths:
   /confirm/{token}:
     get:
       tags:
-        - "subscription"
+        - "orchestrator"
       summary: "Confirm email subscription"
-      description: "Confirms a subscription using the token sent in the confirmation email."
+      description: "Orchestrator (:8090) HTML result page. Confirms the subscription via NATS request-reply (subscription.confirm). Idempotent: it sets confirmed=true and does NOT consume the token (email scanners prefetch links, so a GET often arrives before the user); re-hitting it is a no-op. The token is reaped by FK cascade when the subscription is deleted on unsubscribe."
       operationId: "confirmSubscription"
       parameters:
         - name: "token"
@@ -53,20 +54,18 @@ paths:
           required: true
           type: "string"
       produces:
-        - "application/json"
+        - "text/html"
       responses:
         "200":
-          description: "Subscription confirmed successfully"
-        "400":
-          description: "Invalid token"
+          description: "Subscription confirmed (result page rendered)"
         "404":
           description: "Token not found"
   /unsubscribe/{token}:
     get:
       tags:
-        - "subscription"
+        - "orchestrator"
       summary: "Unsubscribe from release notifications"
-      description: "Unsubscribes an email from release notifications using the token sent in emails."
+      description: "Orchestrator (:8090) HTML result page. Unsubscribes via NATS request-reply (subscription.unsubscribe); the subscription service hard-deletes the row and publishes events.subscription.removed."
       operationId: "unsubscribe"
       parameters:
         - name: "token"
@@ -75,20 +74,35 @@ paths:
           required: true
           type: "string"
       produces:
-        - "application/json"
+        - "text/html"
+      responses:
+        "200":
+          description: "Unsubscribed (result page rendered)"
+        "404":
+          description: "Token not found"
+    post:
+      tags:
+        - "orchestrator"
+      summary: "One-click unsubscribe (RFC 8058)"
+      description: "Orchestrator (:8090) List-Unsubscribe-Post one-click endpoint. Same NATS path as the GET; returns status only, no page."
+      operationId: "unsubscribeOneClick"
+      parameters:
+        - name: "token"
+          in: "path"
+          description: "Unsubscribe token"
+          required: true
+          type: "string"
       responses:
         "200":
           description: "Unsubscribed successfully"
-        "400":
-          description: "Invalid token"
         "404":
           description: "Token not found"
-  /subscriptions:
+  /api/subscriptions:
     get:
       tags:
         - "subscription"
       summary: "Get subscriptions for an email"
-      description: "Returns all active subscriptions for the given email address."
+      description: "Subscription service (:8080). Returns all active subscriptions for the given email address. Gated by X-API-Key when API_KEY is set."
       operationId: "getSubscriptions"
       parameters:
         - name: "email"
@@ -107,6 +121,8 @@ paths:
               $ref: "#/definitions/Subscription"
         "400":
           description: "Invalid email"
+        "401":
+          description: "Missing or invalid X-API-Key (when API_KEY is set)"
 definitions:
   SubscribeRequest:
     type: "object"

@@ -19,15 +19,18 @@ SMTP for email.
 Live deployment: <https://repo-release-notifier.vercel.app>
 
 The expected path is `docker compose up --build`. That brings up
-Postgres, Redis, NATS, the app and the notifier together; migrations
-run on startup.
+NATS, Redis, three Postgres instances, and the four services
+(orchestrator, subscription, catalog, notifier); migrations run on
+startup.
 
 Locally, once `.env` is populated (`cp .env.example .env` and fill
 in SMTP credentials at minimum):
 
 ```
-go run ./cmd/app        # core: HTTP API + scanner
-go run ./cmd/notifier   # notifier: NATS consumer → SMTP
+go run ./cmd/orchestrator  # saga coordinator: POST /subscribe
+go run ./cmd/app           # subscription: confirm/unsubscribe API + saga participant
+go run ./cmd/catalog       # repo registry + release scanner + saga participant
+go run ./cmd/notifier      # NATS consumer → SMTP
 go test ./... -race
 golangci-lint run ./...
 ```
@@ -41,53 +44,41 @@ set all three — see the notes below for why.
 
 ## Architecture
 
-A modular **core** (`cmd/app`) plus an extracted **notifier** microservice
-(`cmd/notifier`), connected asynchronously over a **NATS + JetStream** broker.
-Topology and rationale: [docs/microservices.md](docs/microservices.md),
-[ADR-012](docs/adr/012-notifier-service-boundary.md) (boundary) and
-[ADR-013](docs/adr/013-message-broker-nats-jetstream.md) (broker).
+**Four services from one Go module**, coordinated over a **NATS + JetStream** broker; each
+stateful service owns its **own Postgres**. Full topology, diagrams, and the saga flow:
+[docs/microservices.md](docs/microservices.md). Decisions:
+[ADR-012](docs/adr/012-notifier-service-boundary.md) (boundary),
+[ADR-013](docs/adr/013-message-broker-nats-jetstream.md) (broker),
+[ADR-014](docs/adr/014-cross-service-transaction-strategy.md) (the subscribe saga).
 
-Core (`cmd/app`) — three concerns:
-
-- **HTTP API** (Gin) — the four endpoints from the swagger spec
-  plus a `GET /` that serves an HTML subscription form and a
-  `GET /health` for liveness.
-- **Service layer** — all business logic; validates input, talks
-  to the repository and the GitHub client, **renders** emails and
-  **publishes** them to the broker. Depends on interfaces, not concrete types.
-- **Scanner** — a ticker-driven goroutine that periodically
-  iterates every confirmed subscription, checks GitHub for a new
-  release tag, updates `last_seen_tag`, and **publishes one
-  `notify.release` command per recipient** when a new tag appears.
-
-Notifier (`cmd/notifier`) — a stateless **JetStream consumer** that delivers
-each pre-rendered command over SMTP: ack on success, retry on failure,
-dead-letter poison messages. No templates, no DB.
+- **orchestrator** (`cmd/orchestrator`) — owns the subscribe **saga** (a `saga_log`, no
+  business data) and the public `POST /subscribe`.
+- **subscription** (`cmd/app`) — `subscriptions` + tokens, email composition, and the
+  confirm / unsubscribe / list API. Saga participant (`create`, the pivot).
+- **catalog** (`cmd/catalog`) — the watched-repo registry + the release scanner + GitHub
+  client/cache. Saga participant (`register` / `release`).
+- **notifier** (`cmd/notifier`) — a stateless JetStream consumer that delivers pre-rendered
+  emails over SMTP.
 
 Packages follow the same shape:
 
 ```
-cmd/app/main.go              core composition root (API + scanner + publisher)
-cmd/notifier/main.go         notifier composition root (JetStream consumer)
+cmd/{orchestrator,app,catalog,notifier}/main.go   one composition root each
 
 internal/
-  app/                       the core service
-    domain/                  GORM models, DTOs, sentinel errors (no deps)
-    api/                     HTTP handlers, middleware, router, pages
-    service/                 business logic + email composition (templates)
-    repository/              GORM queries
-    scanner/                 background release checker
-    github/                  GitHub client + optional Redis-cached wrapper
-    cache/                   thin Redis wrapper
-    db/                      Postgres connection, migrations
-    natspublisher/           publishes rendered email commands to NATS
-    templates/               embedded HTML (emails + pages)
-  notifier/                  stateless SMTP sender + JetStream consumer
+  orchestrator/        saga coordinator, saga_log, NATS participant clients
+  app/                 subscription service
+    api/ service/      HTTP handlers + business logic + email composer (templates)
+    repository/ db/    GORM queries, Postgres connection + migrations
+    saga/              subscription.create handler (the saga pivot)
+    releaseconsumer/ confirmationconsumer/   release fan-out + confirmation email
+  catalog/             register/release handlers, scanner, github, cache, repository
+  notifier/            stateless SMTP sender + JetStream consumer
   shared/
-    notify/                  EmailCommand wire contract + subjects
-    natsbus/                 NATS connect + JetStream stream setup
-    config/                  env helpers
-    observability/           structured slog logging
+    saga/              saga command / reply / event contract + subjects
+    notify/            EmailCommand wire contract
+    natsbus/           NATS connect, streams, request-reply + consumer helpers
+    config/ observability/   env helpers, structured slog logging
 ```
 
 The layering is strict:
@@ -116,70 +107,64 @@ nothing else, so there are no import cycles. Each binary's
 
 ### Subscribe
 
-`POST /api/subscribe` takes `{email, repo}`. The service:
+`POST /subscribe` (on the **orchestrator**) takes `{email, repo}` and runs an **orchestrated
+saga** across the catalog + subscription services (rationale: [ADR-014](docs/adr/014-cross-service-transaction-strategy.md)):
 
-1. Validates `repo` against `^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$`.
-   Anything else is a 400 before any external call, so we don't
-   burn rate-limit budget on malformed input.
-2. Checks for an existing subscription on `(email, repo)` and
-   returns 409 if found. Unsubscribing hard-deletes the row, so a
-   user who left can always re-subscribe.
-3. Calls `GET /repos/{owner}/{repo}` on the GitHub API. A 404
-   bubbles up as a 404; a 429 or 403 with `X-RateLimit-Remaining: 0`
-   / `Retry-After` becomes a 503.
-4. Generates a UUID v4 confirmation token plus a separate
-   UUID v4 unsubscribe token (stored on the subscription row
-   itself, long-lived, used in release emails).
-5. Persists the subscription with `confirmed = false` and
-   **publishes a `notify.confirmation` command**. The email is sent
-   asynchronously by the notifier, so the request never blocks on SMTP;
-   at-least-once delivery means a transient SMTP failure is retried,
-   not lost (ADR-013).
+1. **Register** (catalog, compensatable) — validate the repo on GitHub (404 → 404; a
+   rate-limit → 503) and register it for watching. Fail-fast: the step most likely to fail,
+   so nothing downstream needs undoing if it does.
+2. **Create** (subscription, the *pivot*) — insert the subscription (`confirmed = false`) +
+   a confirmation token in one local transaction. If it fails (already subscribed), the
+   orchestrator **compensates** by releasing the registration.
+3. **Confirmation email** (terminal, only after the saga commits) — the orchestrator emits a
+   `confirmation.requested` event; the subscription service renders it and the notifier
+   delivers it. An email is irreversible, so it lives strictly *after* the pivot; on a crash
+   the `saga_log` rolls forward (re-publish, deduplicated), never back.
+
+The orchestrator records every step in a `saga_log`, so a crash recovers deterministically:
+compensate before the pivot, roll forward after it.
 
 ### Confirm / Unsubscribe
 
-`GET /api/confirm/:token` looks up the confirmation token, sets
-`confirmed = true` on the associated subscription, and deletes the
-token row. One-shot.
+The confirm and unsubscribe links in emails point at the **orchestrator**
+(`:8090`), which serves an HTML result page and performs the action over
+NATS request-reply to the subscription service.
 
-`GET /api/unsubscribe/:token` looks the subscription up by its
-unsubscribe token and deletes it. `POST /api/unsubscribe/:token`
-is the same handler — exposed as POST too so the one-click
-unsubscribe header in outgoing mail works natively in Gmail and
-Apple Mail.
+`GET /confirm/:token` confirms the subscription. It is **idempotent** — email
+scanners prefetch links, so re-hitting it just re-confirms; the token is not
+consumed, and is reaped by FK cascade when the subscription is deleted.
+
+`GET /unsubscribe/:token` deletes the subscription; `POST /unsubscribe/:token`
+is the same action exposed for the RFC 8058 one-click `List-Unsubscribe`
+header (Gmail, Apple Mail).
 
 ### Scanner
 
-Started as a goroutine from `main`, fed the process-level context
-so SIGINT/SIGTERM cleanly stops it. Each tick:
+Runs in the **catalog** service as a goroutine fed the process context. Each tick:
 
-1. `FindDistinctConfirmedRepos` returns one string per unique
-   repo that at least one confirmed user cares about — we dedupe
-   so we make one GitHub call per repo per cycle, not one per
-   subscription.
-2. For each repo: fetch `releases/latest`, then every confirmed
-   subscriber on that repo. If the new tag matches the stored
-   `last_seen_tag`, skip. Otherwise update the tag and **publish one
-   `notify.release` command per subscriber** to the broker.
-3. If GitHub returns rate-limited, abort the entire cycle rather
-   than burning further budget on guaranteed failures. Next tick
-   retries normally.
-4. `checkRepo` is wrapped in `safeCheckRepo`, which recovers
-   panics and logs them — one bad repo never kills the goroutine.
+1. List the repos with at least one registration (`ActiveRepos`) — one GitHub call per repo
+   per cycle, not one per subscription.
+2. For each repo: fetch `releases/latest`. If the tag matches the stored `last_seen_tag`,
+   skip. Otherwise advance the cursor and **publish one `release.detected` event**. The
+   subscription service (which owns the subscriber list) consumes it and fans out one
+   `notify.release` per recipient — the scanner is the detector, not the address book.
+3. If GitHub returns rate-limited, abort the cycle rather than burning further budget. Next
+   tick retries.
+4. `checkRepo` is wrapped in `safeCheckRepo`, which recovers panics — one bad repo never
+   kills the goroutine.
 
 ### Silent first scan
 
-A freshly confirmed subscription has `last_seen_tag = ""`. The
-first scan records the current tag but does **not** email — a new
-subscriber shouldn't immediately receive a notification for a
-release that happened a year ago. From the second scan onwards,
-a change triggers an email.
+A newly registered repo's cursor (`watched_repos.last_seen_tag`) starts
+`""`. The first scan records the current tag but does **not** publish — a
+new subscriber shouldn't immediately get a notification for a release
+that happened a year ago. From the second scan onwards, a change fires.
 
 ### Late unsubscribe (accepted)
 
-Release recipients are resolved when the scan **publishes**, so a user
-who unsubscribes in the brief window between publish and send may still
-receive that one release email. This is deliberate — the same tolerance
+Release recipients are resolved when the subscription service handles
+`release.detected`, so a user who unsubscribes in the brief window before
+send may still receive that one release email. This is deliberate — the same tolerance
 every email system has ("allow a few days for changes to take effect"),
 not a bug. See [ADR-013](docs/adr/013-message-broker-nats-jetstream.md).
 
@@ -187,19 +172,20 @@ not a bug. See [ADR-013](docs/adr/013-message-broker-nats-jetstream.md).
 
 ## Data model
 
-Two tables.
+One database **per stateful service**.
 
-`subscriptions`:
-`id, email, repo, confirmed, last_seen_tag, unsubscribe_token,
-created_at, updated_at`
+**subscription** — `subscriptions (id, public_id, email, repo, confirmed, unsubscribe_token,
+created_at, updated_at)` + `confirmation_tokens (id, token, subscription_id FK ON DELETE
+CASCADE, created_at)`. `public_id` is the UUID the orchestrator mints as the cross-service
+identity. Unique indexes on `(email, repo)` and `public_id`; subscriptions are hard-deleted
+on unsubscribe, so a plain unique index suffices.
 
-`confirmation_tokens`:
-`id, token, subscription_id (FK, ON DELETE CASCADE), created_at`
+**catalog** — `watched_repos (repo PK, last_seen_tag)` (the scan cursor) +
+`repo_registrations (subscription_id PK, repo, FK → watched_repos)` (a repo is polled while
+it has ≥ 1 registration).
 
-**Unique index on `(email, repo)`.** Subscriptions are hard-deleted
-on unsubscribe, so a plain unique index is enough — once the row is
-gone the same `(email, repo)` pair can be inserted again. No tombstone
-rows, no partial index, no `deleted_at` filtering on reads.
+**orchestrator** — `saga_log (saga_id PK, state, subscription_id, payload, …)`, the durable
+record that drives recovery.
 
 ---
 
@@ -231,15 +217,14 @@ changes; the dependency is genuinely optional.
 
 ## HTML subscription page
 
-`GET /` serves a minimal form from `internal/templates/pages/subscribe.html`
-(embedded via `//go:embed`). It `fetch`es `POST /api/subscribe`
-with a JSON body and shows inline success / error messages. If
-the deployment has an API key configured, there's an optional
-password field on the form for it.
+`GET /` on the **orchestrator** serves a minimal form from
+`internal/orchestrator/api/subscribe.html` (embedded via `//go:embed`).
+It `fetch`es `POST /subscribe` same-origin — the orchestrator owns the
+subscribe saga, so the form lives with its endpoint — with a JSON body,
+and shows inline success / error messages.
 
-All HTML the service ever emits — emails and public pages — lives
-under `internal/templates/` and goes through `RenderEmail` or
-`Page` helpers. Consumers don't touch the filesystem.
+The subscription service emits only emails now; they're rendered from
+templates under `internal/app/templates/emails/` via `RenderEmail`.
 
 ---
 
@@ -251,8 +236,8 @@ with three things worth mentioning:
 - **`List-Unsubscribe` + `List-Unsubscribe-Post` headers** so
   Gmail, Apple Mail, Outlook and Yahoo render a native
   "Unsubscribe" button in the UI. One POST from the client to
-  `/api/unsubscribe/:token` (we accept both GET and POST) and the
-  subscription is gone.
+  `/unsubscribe/:token` on the orchestrator (we accept both GET and
+  POST) and the subscription is gone.
 - **Unsubscribe link in the confirmation email**, not only in
   release notifications. If someone subscribes you without
   consent, you shouldn't have to wait for a release to get out.
@@ -269,8 +254,9 @@ with three things worth mentioning:
 
 ## API key authentication
 
-`POST /api/subscribe` and `GET /api/subscriptions` sit behind an
-`X-API-Key` header check when `API_KEY` is set. Confirm and
+`GET /api/subscriptions` (on the subscription service) sits behind an
+`X-API-Key` header check when `API_KEY` is set. Subscribe is public —
+the confirmation email is the double opt-in — and confirm and
 unsubscribe stay open because they're opened from mail clients,
 which can't attach request headers — the token in the URL is the
 capability for those routes (UUID v4, 122 bits of entropy).

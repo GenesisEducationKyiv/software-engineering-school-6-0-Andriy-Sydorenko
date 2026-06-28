@@ -5,10 +5,16 @@ import (
 	"fmt"
 	"net/smtp"
 	"strings"
+
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notify"
 )
 
+// mimeBoundary delimits the multipart/alternative parts. It must never appear in
+// a body; our templated emails never contain it.
+const mimeBoundary = "rrn_boundary_4d6f8a2e9b"
+
 type Mailer interface {
-	Send(ctx context.Context, to, subject, htmlBody string) error
+	Send(ctx context.Context, msg notify.EmailCommand) error
 }
 
 type SMTPMailer struct {
@@ -27,11 +33,12 @@ func NewSMTPMailer(cfg *Config) *SMTPMailer {
 	}
 }
 
-func (m *SMTPMailer) Send(ctx context.Context, to, subject, htmlBody string) error {
+func (m *SMTPMailer) Send(ctx context.Context, msg notify.EmailCommand) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	body := buildMIME(m.username, to, subject, htmlBody)
+	to := msg.RecipientEmail
+	body := buildMIME(m.username, msg)
 	addr := fmt.Sprintf("%s:%s", m.host, m.port)
 	auth := smtp.PlainAuth("", m.username, m.password, m.host)
 
@@ -51,14 +58,34 @@ func (m *SMTPMailer) Send(ctx context.Context, to, subject, htmlBody string) err
 	}
 }
 
-func buildMIME(from, to, subject, htmlBody string) []byte {
+func buildMIME(from string, msg notify.EmailCommand) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", from)
-	fmt.Fprintf(&b, "To: %s\r\n", to)
-	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
+	fmt.Fprintf(&b, "To: %s\r\n", msg.RecipientEmail)
+	fmt.Fprintf(&b, "Subject: %s\r\n", msg.Subject)
+	for k, v := range msg.Headers {
+		fmt.Fprintf(&b, "%s: %s\r\n", k, v)
+	}
 	fmt.Fprint(&b, "MIME-Version: 1.0\r\n")
-	fmt.Fprint(&b, "Content-Type: text/html; charset=UTF-8\r\n")
-	fmt.Fprint(&b, "Content-Transfer-Encoding: 8bit\r\n\r\n")
-	fmt.Fprintf(&b, "%s\r\n", htmlBody)
+
+	// HTML-only when there's no plaintext alternative; otherwise
+	// multipart/alternative (plain + HTML), which clients prefer.
+	if msg.PlainBody == "" {
+		fmt.Fprint(&b, "Content-Type: text/html; charset=UTF-8\r\n")
+		fmt.Fprint(&b, "Content-Transfer-Encoding: 8bit\r\n\r\n")
+		fmt.Fprintf(&b, "%s\r\n", msg.HTMLBody)
+		return []byte(b.String())
+	}
+
+	fmt.Fprintf(&b, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", mimeBoundary)
+	writePart := func(contentType, body string) {
+		fmt.Fprintf(&b, "--%s\r\n", mimeBoundary)
+		fmt.Fprintf(&b, "Content-Type: %s; charset=UTF-8\r\n", contentType)
+		fmt.Fprint(&b, "Content-Transfer-Encoding: 8bit\r\n\r\n")
+		fmt.Fprintf(&b, "%s\r\n", body)
+	}
+	writePart("text/plain", msg.PlainBody)
+	writePart("text/html", msg.HTMLBody)
+	fmt.Fprintf(&b, "--%s--\r\n", mimeBoundary)
 	return []byte(b.String())
 }

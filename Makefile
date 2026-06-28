@@ -3,7 +3,7 @@
 # Compile every main package without producing artifact files.
 # Vets default + integration + e2e tagged code.
 build-check:
-	go build -o /dev/null ./cmd/app ./cmd/notifier
+	go build -o /dev/null ./cmd/app ./cmd/catalog ./cmd/notifier ./cmd/orchestrator
 	go vet ./...
 	go vet -tags=integration ./tests/integration/...
 	go vet -tags=e2e ./tests/e2e/...
@@ -18,7 +18,7 @@ generate-mocks:
 # pre-commit hook to enforce that committed mocks match the directives (catches
 # stale mocks after interface edits and missing mocks after a new directive).
 verify-mocks: generate-mocks
-	@git diff --exit-code -- internal/*/mocks/ || \
+	@git diff --exit-code -- internal/*/mocks/ internal/*/*/mocks/ || \
 	  (echo "ERROR: mocks are out of date — run 'make generate-mocks' and commit"; exit 1)
 
 # Install the repo's git hooks (currently: pre-commit runs verify-mocks).

@@ -42,19 +42,12 @@ func (h *Harness) DumpContainerLogs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	for _, c := range []struct {
-		name string
-		cont testcontainers.Container
-	}{
-		{"postgres", h.pgC},
-		{"mailpit", h.mailC},
-		{"chromium", h.browserC},
-	} {
-		if c.cont == nil {
+	for name, c := range h.containers {
+		if c == nil {
 			continue
 		}
-		if err := writeContainerLog(ctx, t, c.name, c.cont); err != nil {
-			t.Logf("artifacts: dump %s logs: %v", c.name, err)
+		if err := writeContainerLog(ctx, t, name, c); err != nil {
+			t.Logf("artifacts: dump %s logs: %v", name, err)
 		}
 	}
 }

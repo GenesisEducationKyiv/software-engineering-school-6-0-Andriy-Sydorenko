@@ -13,45 +13,45 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/api"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/cache"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/confirmationconsumer"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/eventpublisher"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/natspublisher"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/releaseconsumer"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/scanner"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/config"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/logging"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/saga"
 
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/db"
-	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/github"
+	appsaga "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/saga"
 )
 
 const envFile = ".env"
 
 type Config struct {
 	DB           *database.Config
-	Redis        *cache.Config
-	GitHub       *githubclient.Config
-	Scanner      *scanner.Config
 	Log          *logging.Config
 	Port         string
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
 	APIKey       string
-	BaseURL      string // BASE_URL for confirmation/unsubscribe links in emails
-	NATSURL      string // NATS_URL, e.g. "nats://localhost:4222"
+	BaseURL      string
+	NATSURL      string
+	MaxDeliver   int
+	AckWait      time.Duration
 }
 
 func (c *Config) validate() error {
 	if c.DB.URL == "" && (c.DB.User == "" || c.DB.Name == "") {
 		return fmt.Errorf("either DATABASE_URL or DB_USER+DB_NAME (with DB_HOST/DB_PORT/DB_PASSWORD) must be set")
 	}
-	if err := c.Log.Validate(); err != nil {
-		return err
-	}
-	return nil
+	return c.Log.Validate()
 }
 
 func loadCfg() (*Config, error) {
@@ -60,27 +60,24 @@ func loadCfg() (*Config, error) {
 	}
 
 	dbCfg := database.LoadConfig()
-	redisCfg := cache.LoadConfig()
-	scannerCfg := scanner.LoadConfig()
-	githubCfg := githubclient.LoadConfig()
 	logCfg := logging.LoadConfig()
 
-	if err := config.ValidateAll(dbCfg, redisCfg, scannerCfg, githubCfg, logCfg); err != nil {
+	if err := config.ValidateAll(dbCfg, logCfg); err != nil {
 		return nil, err
 	}
 
+	port := config.GetEnvOrDefault("PORT", "8080")
 	cfg := &Config{
 		DB:           dbCfg,
-		Redis:        redisCfg,
-		Scanner:      scannerCfg,
-		GitHub:       githubCfg,
 		Log:          logCfg,
-		Port:         config.GetEnvOrDefault("PORT", "8080"),
+		Port:         port,
 		ReadTimeout:  config.GetEnvDuration("READ_TIMEOUT", 10*time.Second),
 		WriteTimeout: config.GetEnvDuration("WRITE_TIMEOUT", 10*time.Second),
 		APIKey:       config.GetEnvOrDefault("API_KEY", ""),
-		BaseURL:      config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
+		BaseURL:      config.GetEnvOrDefault("BASE_URL", "http://localhost:8090"),
 		NATSURL:      config.GetEnvOrDefault("NATS_URL", "nats://localhost:4222"),
+		MaxDeliver:   config.GetEnvInt("CONSUMER_MAX_DELIVER", 5),
+		AckWait:      config.GetEnvDuration("CONSUMER_ACK_WAIT", 30*time.Second),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -107,7 +104,6 @@ func run() error {
 	}
 
 	repo := repository.New(db)
-	gh := buildGitHubClient(cfg)
 
 	nc, js, err := natsbus.Connect(cfg.NATSURL)
 	if err != nil {
@@ -118,16 +114,32 @@ func run() error {
 		return fmt.Errorf("ensure streams: %w", err)
 	}
 
-	note := service.NewEmailNotifier(cfg.BaseURL, natspublisher.New(js))
-	svc := service.New(repo, repo, gh, note, service.RandomToken)
-	scan := scanner.New(repo, gh, note, cfg.Scanner)
+	emailNotifier := service.NewEmailNotifier(cfg.BaseURL, natspublisher.New(js))
+	svc := service.New(repo, repo, eventpublisher.New(js))
+	sagaHandler := appsaga.NewHandler(repo)
+	cmdHandler := appsaga.NewCommandHandler(svc)
+	relConsumer := releaseconsumer.New(repo, emailNotifier)
+	confConsumer := confirmationconsumer.New(emailNotifier)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	go scan.Run(ctx)
+
+	stopConsumers, err := startConsumers(
+		ctx,
+		nc,
+		js,
+		sagaHandler,
+		cmdHandler,
+		relConsumer,
+		confConsumer,
+		cfg,
+	)
+	if err != nil {
+		return err
+	}
+	defer stopConsumers()
 
 	router := api.NewRouter(api.NewHandler(svc), cfg.APIKey)
-
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%s", cfg.Port),
 		Handler:      router,
@@ -152,34 +164,82 @@ func run() error {
 	return nil
 }
 
+// startConsumers wires the subscription.create saga handler (request-reply) and
+// the release.detected + confirmation.requested consumers, returning one cleanup func.
+func startConsumers(
+	ctx context.Context,
+	nc *nats.Conn,
+	js jetstream.JetStream,
+	h *appsaga.Handler,
+	cmd *appsaga.CommandHandler,
+	rc *releaseconsumer.Consumer,
+	cc *confirmationconsumer.Consumer,
+	cfg *Config,
+) (func(), error) {
+	var replies []*nats.Subscription
+	respond := func(subject string, fn natsbus.HandlerFunc) error {
+		sub, err := natsbus.RespondJSON(nc, subject, saga.QueueSubscription, fn)
+		if err != nil {
+			return fmt.Errorf("subscribe %s: %w", subject, err)
+		}
+		replies = append(replies, sub)
+		return nil
+	}
+	unsubReplies := func() {
+		for _, s := range replies {
+			_ = s.Unsubscribe()
+		}
+	}
+
+	if err := respond(saga.SubjSubscriptionCreate, h.Create); err != nil {
+		return nil, err
+	}
+	if err := respond(saga.SubjSubscriptionConfirm, cmd.Confirm); err != nil {
+		unsubReplies()
+		return nil, err
+	}
+	if err := respond(saga.SubjSubscriptionUnsubscribe, cmd.Unsubscribe); err != nil {
+		unsubReplies()
+		return nil, err
+	}
+
+	release, err := natsbus.Consume(
+		ctx, js, natsbus.ConsumerConfig{
+			Stream:        saga.EventsStreamName,
+			Durable:       saga.DurableReleaseConsumer,
+			FilterSubject: saga.SubjReleaseDetected,
+			MaxDeliver:    cfg.MaxDeliver,
+			AckWait:       cfg.AckWait,
+		}, rc.Handle,
+	)
+	if err != nil {
+		unsubReplies()
+		return nil, fmt.Errorf("consume %s: %w", saga.SubjReleaseDetected, err)
+	}
+	confirmation, err := natsbus.Consume(
+		ctx, js, natsbus.ConsumerConfig{
+			Stream:        saga.EventsStreamName,
+			Durable:       saga.DurableConfirmationConsumer,
+			FilterSubject: saga.SubjConfirmationRequested,
+			MaxDeliver:    cfg.MaxDeliver,
+			AckWait:       cfg.AckWait,
+		}, cc.Handle,
+	)
+	if err != nil {
+		unsubReplies()
+		release.Stop()
+		return nil, fmt.Errorf("consume %s: %w", saga.SubjConfirmationRequested, err)
+	}
+	return func() {
+		unsubReplies()
+		release.Stop()
+		confirmation.Stop()
+	}, nil
+}
+
 func main() {
 	if err := run(); err != nil {
-		// Pre-logger: slog default isn't configured until inside run().
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-// githubClient is the GitHub capability surface main wires into both the
-// service (repo validation) and the scanner (release fetching).
-type githubClient interface {
-	service.RepoValidator
-	scanner.ReleaseFetcher
-}
-
-// buildGitHubClient returns the GitHub client, wrapped in the Redis cache
-// decorator when Redis is configured and reachable. Cache failure is non-fatal:
-// the app falls back to the uncached client.
-func buildGitHubClient(cfg *Config) githubClient {
-	base := githubclient.NewClient(cfg.GitHub)
-	if cfg.Redis.DSN() == "" {
-		return base
-	}
-	rdb, err := cache.NewRedis(cfg.Redis)
-	if err != nil {
-		slog.Warn("redis unavailable, continuing without cache", "err", err)
-		return base
-	}
-	slog.Info("github client: redis cache enabled")
-	return githubclient.NewCachedClient(base, rdb)
 }

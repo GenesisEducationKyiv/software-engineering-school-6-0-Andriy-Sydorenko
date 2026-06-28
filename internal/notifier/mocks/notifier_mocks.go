@@ -13,6 +13,7 @@ import (
 	context "context"
 	reflect "reflect"
 
+	notify "github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notify"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -41,15 +42,15 @@ func (m *MockMailer) EXPECT() *MockMailerMockRecorder {
 }
 
 // Send mocks base method.
-func (m *MockMailer) Send(ctx context.Context, to, subject, htmlBody string) error {
+func (m *MockMailer) Send(ctx context.Context, msg notify.EmailCommand) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Send", ctx, to, subject, htmlBody)
+	ret := m.ctrl.Call(m, "Send", ctx, msg)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Send indicates an expected call of Send.
-func (mr *MockMailerMockRecorder) Send(ctx, to, subject, htmlBody any) *gomock.Call {
+func (mr *MockMailerMockRecorder) Send(ctx, msg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Send", reflect.TypeOf((*MockMailer)(nil).Send), ctx, to, subject, htmlBody)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Send", reflect.TypeOf((*MockMailer)(nil).Send), ctx, msg)
 }

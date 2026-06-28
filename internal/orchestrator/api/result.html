@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RelEasely</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+           max-width: 32rem; margin: 4rem auto; padding: 0 1rem; line-height: 1.5; text-align: center; }
+    .icon { font-size: 3rem; line-height: 1; }
+    .icon.ok { color: #2da44e; }
+    .icon.err { color: #cf222e; }
+    h1 { font-size: 1.5rem; margin: 0.75rem 0 0.25rem; }
+    p { color: #666; margin-top: 0; }
+    a { color: #2da44e; }
+  </style>
+</head>
+<body>
+  <div class="icon {{.Class}}">{{.Icon}}</div>
+  <h1>{{.Title}}</h1>
+  <p>{{.Message}}</p>
+  <p><a href="/">← Back to RelEasely</a></p>
+</body>
+</html>

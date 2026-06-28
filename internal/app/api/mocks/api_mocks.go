@@ -41,20 +41,6 @@ func (m *MockService) EXPECT() *MockServiceMockRecorder {
 	return m.recorder
 }
 
-// ConfirmSubscription mocks base method.
-func (m *MockService) ConfirmSubscription(ctx context.Context, token string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ConfirmSubscription", ctx, token)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// ConfirmSubscription indicates an expected call of ConfirmSubscription.
-func (mr *MockServiceMockRecorder) ConfirmSubscription(ctx, token any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfirmSubscription", reflect.TypeOf((*MockService)(nil).ConfirmSubscription), ctx, token)
-}
-
 // GetSubscriptions mocks base method.
 func (m *MockService) GetSubscriptions(ctx context.Context, email string) ([]domain.SubscriptionResponse, error) {
 	m.ctrl.T.Helper()
@@ -68,32 +54,4 @@ func (m *MockService) GetSubscriptions(ctx context.Context, email string) ([]dom
 func (mr *MockServiceMockRecorder) GetSubscriptions(ctx, email any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSubscriptions", reflect.TypeOf((*MockService)(nil).GetSubscriptions), ctx, email)
-}
-
-// Subscribe mocks base method.
-func (m *MockService) Subscribe(ctx context.Context, req domain.SubscribeRequest) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Subscribe", ctx, req)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Subscribe indicates an expected call of Subscribe.
-func (mr *MockServiceMockRecorder) Subscribe(ctx, req any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Subscribe", reflect.TypeOf((*MockService)(nil).Subscribe), ctx, req)
-}
-
-// Unsubscribe mocks base method.
-func (m *MockService) Unsubscribe(ctx context.Context, token string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Unsubscribe", ctx, token)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Unsubscribe indicates an expected call of Unsubscribe.
-func (mr *MockServiceMockRecorder) Unsubscribe(ctx, token any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Unsubscribe", reflect.TypeOf((*MockService)(nil).Unsubscribe), ctx, token)
 }

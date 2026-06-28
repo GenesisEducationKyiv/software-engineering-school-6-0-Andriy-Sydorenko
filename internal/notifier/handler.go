@@ -22,7 +22,7 @@ func NewHandler(m Mailer) Handler {
 			return fmt.Errorf("%w: empty recipient", ErrPermanent)
 		}
 		start := time.Now()
-		if err := m.Send(ctx, cmd.RecipientEmail, cmd.Subject, cmd.HTMLBody); err != nil {
+		if err := m.Send(ctx, cmd); err != nil {
 			return fmt.Errorf("send email: %w", err)
 		}
 		sendDuration.Observe(time.Since(start).Seconds())

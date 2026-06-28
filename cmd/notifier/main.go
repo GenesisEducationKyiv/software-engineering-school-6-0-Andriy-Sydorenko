@@ -82,10 +82,13 @@ func run() error {
 
 	adminMux := http.NewServeMux()
 	adminMux.Handle("/metrics", promhttp.Handler())
+	adminMux.Handle("/v1/send-email", notifier.SendEmailRESTHandler(mailer, cfg.InternalToken))
 	adminSrv := &http.Server{
 		Addr:              cfg.AdminAddr,
 		Handler:           adminMux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
 	}
 	go func() {
 		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

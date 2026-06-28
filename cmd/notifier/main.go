@@ -22,7 +22,10 @@ import (
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
 )
 
-const envFile = ".env.notifier"
+const (
+	envFile      = ".env.notifier"
+	drainTimeout = 10 * time.Second
+)
 
 type Config struct {
 	SMTP       *notifier.Config
@@ -115,6 +118,16 @@ func run() error {
 
 	slog.Info("notifier consuming", "admin", cfg.AdminAddr)
 	<-ctx.Done()
+
+	// Stop pulling new messages and wait for the in-flight handler to finish
+	// (and ack) so a send isn't cut mid-flight and redelivered on next start.
+	slog.Info("notifier draining", "timeout", drainTimeout)
+	cc.Drain()
+	select {
+	case <-cc.Closed():
+	case <-time.After(drainTimeout):
+		slog.Warn("notifier: drain timed out, exiting with in-flight work")
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

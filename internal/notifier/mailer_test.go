@@ -11,12 +11,14 @@ import (
 )
 
 func TestBuildMIMEStructure(t *testing.T) {
-	raw := string(buildMIME(
-		"notify@example.com",
-		"user@example.com",
-		"Confirm your subscription",
-		"<p>hello html</p>",
-	))
+	raw := string(
+		buildMIME(
+			"notify@example.com",
+			"user@example.com",
+			"Confirm your subscription",
+			"<p>hello html</p>",
+		),
+	)
 
 	// SMTP receiver gets these exact bytes — net/mail parsing is the contract.
 	parsed, err := mail.ReadMessage(strings.NewReader(raw))
@@ -51,4 +53,23 @@ func TestSMTPMailerSendHonoursCancelledContext(t *testing.T) {
 
 	err := m.Send(ctx, "a@b.com", "subject", "<p>body</p>")
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestSMTPMailerSendRejectsHeaderInjection(t *testing.T) {
+	m := NewSMTPMailer(&Config{Host: "127.0.0.1", Port: "1", Username: "u", Password: "p"})
+
+	cases := map[string]struct{ to, subject string }{
+		"crlf in subject":    {"a@b.com", "Hi\r\nBcc: evil@example.com"},
+		"crlf in recipient":  {"a@b.com\r\nRCPT TO:<evil@example.com>", "Hi"},
+		"lone lf in subject": {"a@b.com", "Hi\nX-Injected: 1"},
+	}
+	for name, tc := range cases {
+		t.Run(
+			name, func(t *testing.T) {
+				err := m.Send(context.Background(), tc.to, tc.subject, "<p>body</p>")
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "line breaks")
+			},
+		)
+	}
 }

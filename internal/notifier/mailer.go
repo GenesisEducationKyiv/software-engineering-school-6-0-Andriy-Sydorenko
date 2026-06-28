@@ -31,6 +31,9 @@ func (m *SMTPMailer) Send(ctx context.Context, to, subject, htmlBody string) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if strings.ContainsAny(to, "\r\n") || strings.ContainsAny(subject, "\r\n") {
+		return fmt.Errorf("email header fields must not contain line breaks")
+	}
 	body := buildMIME(m.username, to, subject, htmlBody)
 	addr := fmt.Sprintf("%s:%s", m.host, m.port)
 	auth := smtp.PlainAuth("", m.username, m.password, m.host)
@@ -63,7 +66,6 @@ func buildMIME(from, to, subject, htmlBody string) []byte {
 	return []byte(b.String())
 }
 
-// maskEmail keeps logs PII-safe: "alice@example.com" -> "a***@example.com".
 func maskEmail(email string) string {
 	at := strings.IndexByte(email, '@')
 	if at <= 0 {

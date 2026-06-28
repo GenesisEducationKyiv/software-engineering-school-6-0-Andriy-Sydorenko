@@ -13,10 +13,9 @@ const maxRESTBodyBytes = 1 << 20 // 1 MiB
 type restSendEmailRequest struct {
 	RecipientEmail string `json:"recipient_email"`
 	Subject        string `json:"subject"`
-	HtmlBody       string `json:"html_body"`
+	HTMLBody       string `json:"html_body"`
 }
 
-// An empty token disables auth, mirroring the gRPC interceptor wiring.
 func SendEmailRESTHandler(mailer Mailer, token string) http.HandlerFunc {
 	want := []byte(token)
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -39,14 +38,25 @@ func SendEmailRESTHandler(mailer Mailer, token string) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		if req.RecipientEmail == "" || req.Subject == "" || req.HtmlBody == "" {
-			writeJSONError(w, http.StatusBadRequest, "recipient_email, subject and html_body are required")
+		if req.RecipientEmail == "" || req.Subject == "" || req.HTMLBody == "" {
+			writeJSONError(
+				w,
+				http.StatusBadRequest,
+				"recipient_email, subject and html_body are required",
+			)
 			return
 		}
 
-		if err := mailer.Send(r.Context(), req.RecipientEmail, req.Subject, req.HtmlBody); err != nil {
-			slog.ErrorContext(r.Context(), "send email failed (rest)",
-				"recipient", maskEmail(req.RecipientEmail), "err", err)
+		if err := mailer.Send(
+			r.Context(),
+			req.RecipientEmail,
+			req.Subject,
+			req.HTMLBody,
+		); err != nil {
+			slog.ErrorContext(
+				r.Context(), "send email failed (rest)",
+				"recipient", maskEmail(req.RecipientEmail), "err", err,
+			)
 			if isTransientSMTP(err) {
 				writeJSONError(w, http.StatusServiceUnavailable, "mailer temporarily unavailable")
 				return
@@ -55,7 +65,12 @@ func SendEmailRESTHandler(mailer Mailer, token string) http.HandlerFunc {
 			return
 		}
 
-		slog.InfoContext(r.Context(), "email sent (rest)", "recipient", maskEmail(req.RecipientEmail))
+		slog.InfoContext(
+			r.Context(),
+			"email sent (rest)",
+			"recipient",
+			maskEmail(req.RecipientEmail),
+		)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

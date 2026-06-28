@@ -30,7 +30,7 @@ func (s *HTTPSender) SendEmail(ctx context.Context, recipientEmail, subject, htm
 	payload, err := json.Marshal(restSendEmailBody{
 		RecipientEmail: recipientEmail,
 		Subject:        subject,
-		HtmlBody:       htmlBody,
+		HTMLBody:       htmlBody,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal send-email request: %w", err)
@@ -63,7 +63,7 @@ func (s *HTTPSender) SendEmail(ctx context.Context, recipientEmail, subject, htm
 type restSendEmailBody struct {
 	RecipientEmail string `json:"recipient_email"`
 	Subject        string `json:"subject"`
-	HtmlBody       string `json:"html_body"`
+	HTMLBody       string `json:"html_body"`
 }
 
 func readErrorMessage(body io.Reader) string {

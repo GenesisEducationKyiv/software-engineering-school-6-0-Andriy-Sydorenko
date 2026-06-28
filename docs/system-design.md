@@ -311,6 +311,8 @@ All configuration is via environment variables (12-factor). No config files.
 
 **Proposed (referenced elsewhere in this doc, not yet wired):** `CONFIRM_TOKEN_TTL` (§11), `SUBSCRIBE_RATE_LIMIT` (§11).
 
+The notifier also exposes `SendEmail` over REST/JSON (`POST /v1/send-email`) as a selectable transport via `NOTIFIER_TRANSPORT` (`grpc` default, `rest` opt-in) for transport benchmarking and debuggability; proto codegen is managed by `buf` (`buf.yaml`/`buf.gen.yaml`).
+
 ---
 
 ## 15. Deployment & Runtime

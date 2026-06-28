@@ -6,6 +6,14 @@
 # Install with `make install-hooks`. Skip with `git commit --no-verify`.
 set -euo pipefail
 
+if command -v buf >/dev/null 2>&1; then
+  if ! buf lint; then
+    echo
+    echo "buf lint failed — fix the .proto contract before committing."
+    exit 1
+  fi
+fi
+
 if ! make verify-mocks; then
   echo
   echo "Run 'make generate-mocks' and re-stage the changes, then commit again."

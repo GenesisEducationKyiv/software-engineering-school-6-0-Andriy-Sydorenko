@@ -12,6 +12,9 @@
 /server
 /e2e-server
 
+# Locally-built codegen plugins (populated by `make generate-proto`).
+/bin/
+
 # Test binary, built with `go test -c`
 *.test
 

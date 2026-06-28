@@ -15,6 +15,8 @@ import (
 
 var ErrPermanent = errors.New("permanent failure")
 
+const nakBackoff = 5 * time.Second
+
 // Handler processes one decoded message. Return nil to ack, ErrPermanent-wrapped
 // to dead-letter immediately, or any other error to retry (nak).
 type Handler func(ctx context.Context, subject string, data []byte) error
@@ -73,7 +75,9 @@ func Subscribe(
 
 	return cons.Consume(
 		func(msg jetstream.Msg) {
-			herr := h(ctx, msg.Subject(), msg.Data())
+			hctx, cancel := context.WithTimeout(context.Background(), ackWait)
+			defer cancel()
+			herr := h(hctx, msg.Subject(), msg.Data())
 			numDelivered := 1
 			if md, mderr := msg.Metadata(); mderr == nil && md.NumDelivered <= math.MaxInt {
 				numDelivered = int(md.NumDelivered)
@@ -84,8 +88,16 @@ func Subscribe(
 			case actionAck:
 				_ = msg.Ack()
 			case actionNak:
-				slog.Warn("notify: retrying message", "subject", msg.Subject(), "err", herr)
-				_ = msg.Nak()
+				slog.Warn(
+					"notify: retrying message",
+					"subject",
+					msg.Subject(),
+					"err",
+					herr,
+					"delay",
+					nakBackoff,
+				)
+				_ = msg.NakWithDelay(nakBackoff)
 			case actionTerm:
 				slog.Error("notify: dead-lettering message", "subject", msg.Subject(), "err", herr)
 				// Detached context: the DLQ park must survive shutdown cancellation.
@@ -94,8 +106,14 @@ func Subscribe(
 				cancel()
 				if derr != nil {
 					// Nak so a failed park stays redeliverable instead of being lost.
-					slog.Error("notify: DLQ publish failed, naking for retry", "subject", msg.Subject(), "err", derr)
-					_ = msg.Nak()
+					slog.Error(
+						"notify: DLQ publish failed, naking for retry",
+						"subject",
+						msg.Subject(),
+						"err",
+						derr,
+					)
+					_ = msg.NakWithDelay(nakBackoff)
 					return
 				}
 				_ = msg.Term()

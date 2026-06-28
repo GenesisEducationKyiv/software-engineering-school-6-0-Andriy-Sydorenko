@@ -48,6 +48,8 @@ services:
       BASE_URL: ${BASE_URL:-http://localhost:8080}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       NOTIFIER_GRPC_ADDR: notifier:9090
+      NOTIFIER_TRANSPORT: ${NOTIFIER_TRANSPORT:-grpc}
+      NOTIFIER_REST_URL: http://notifier:9091
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
       SCAN_INTERVAL: ${SCAN_INTERVAL:-5m}
       API_KEY: ${API_KEY:-}

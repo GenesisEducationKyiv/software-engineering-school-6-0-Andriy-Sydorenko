@@ -30,18 +30,20 @@ import (
 const envFile = ".env"
 
 type Config struct {
-	DB            *database.Config
-	Redis         *cache.Config
-	GitHub        *githubclient.Config
-	Scanner       *scanner.Config
-	Log           *logging.Config
-	Port          string
-	ReadTimeout   time.Duration
-	WriteTimeout  time.Duration
-	APIKey        string
-	NotifierAddr  string // NOTIFIER_GRPC_ADDR, e.g. "notifier:9090"
-	NotifierToken string // INTERNAL_API_TOKEN; empty disables gRPC auth
-	BaseURL       string // BASE_URL for confirmation/unsubscribe links in emails
+	DB                *database.Config
+	Redis             *cache.Config
+	GitHub            *githubclient.Config
+	Scanner           *scanner.Config
+	Log               *logging.Config
+	Port              string
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	APIKey            string
+	NotifierAddr      string // NOTIFIER_GRPC_ADDR, e.g. "notifier:9090"
+	NotifierToken     string // INTERNAL_API_TOKEN; empty disables gRPC auth
+	NotifierTransport string // NOTIFIER_TRANSPORT: "grpc" (default) or "rest"
+	NotifierRESTURL   string // NOTIFIER_REST_URL, e.g. "http://notifier:9091"
+	BaseURL           string // BASE_URL for confirmation/unsubscribe links in emails
 }
 
 func (c *Config) validate() error {
@@ -70,18 +72,20 @@ func loadCfg() (*Config, error) {
 	}
 
 	cfg := &Config{
-		DB:            dbCfg,
-		Redis:         redisCfg,
-		Scanner:       scannerCfg,
-		GitHub:        githubCfg,
-		Log:           logCfg,
-		Port:          config.GetEnvOrDefault("PORT", "8080"),
-		ReadTimeout:   config.GetEnvDuration("READ_TIMEOUT", 10*time.Second),
-		WriteTimeout:  config.GetEnvDuration("WRITE_TIMEOUT", 10*time.Second),
-		APIKey:        config.GetEnvOrDefault("API_KEY", ""),
-		NotifierAddr:  config.GetEnvOrDefault("NOTIFIER_GRPC_ADDR", "localhost:9090"),
-		NotifierToken: config.GetEnvOrDefault("INTERNAL_API_TOKEN", ""),
-		BaseURL:       config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
+		DB:                dbCfg,
+		Redis:             redisCfg,
+		Scanner:           scannerCfg,
+		GitHub:            githubCfg,
+		Log:               logCfg,
+		Port:              config.GetEnvOrDefault("PORT", "8080"),
+		ReadTimeout:       config.GetEnvDuration("READ_TIMEOUT", 10*time.Second),
+		WriteTimeout:      config.GetEnvDuration("WRITE_TIMEOUT", 10*time.Second),
+		APIKey:            config.GetEnvOrDefault("API_KEY", ""),
+		NotifierAddr:      config.GetEnvOrDefault("NOTIFIER_GRPC_ADDR", "localhost:9090"),
+		NotifierToken:     config.GetEnvOrDefault("INTERNAL_API_TOKEN", ""),
+		NotifierTransport: config.GetEnvOrDefault("NOTIFIER_TRANSPORT", "grpc"),
+		NotifierRESTURL:   config.GetEnvOrDefault("NOTIFIER_REST_URL", ""),
+		BaseURL:           config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -110,13 +114,25 @@ func run() error {
 	repo := repository.New(db)
 	gh := buildGitHubClient(cfg)
 
-	notifierConn, err := notifierclient.Dial(cfg.NotifierAddr, cfg.NotifierToken)
-	if err != nil {
-		return fmt.Errorf("dial notifier: %w", err)
+	var sender service.EmailSender
+	switch cfg.NotifierTransport {
+	case "grpc":
+		notifierConn, err := notifierclient.Dial(cfg.NotifierAddr, cfg.NotifierToken)
+		if err != nil {
+			return fmt.Errorf("dial notifier: %w", err)
+		}
+		defer func() { _ = notifierConn.Close() }()
+		sender = notifierConn
+	case "rest":
+		if cfg.NotifierRESTURL == "" {
+			return fmt.Errorf("NOTIFIER_REST_URL is required when NOTIFIER_TRANSPORT=rest")
+		}
+		sender = notifierclient.NewHTTPSender(cfg.NotifierRESTURL, cfg.NotifierToken)
+	default:
+		return fmt.Errorf("invalid NOTIFIER_TRANSPORT %q (want grpc or rest)", cfg.NotifierTransport)
 	}
-	defer func() { _ = notifierConn.Close() }()
 
-	note := service.NewEmailNotifier(cfg.BaseURL, notifierConn)
+	note := service.NewEmailNotifier(cfg.BaseURL, sender)
 	svc := service.New(repo, repo, gh, note, service.RandomToken)
 	scan := scanner.New(repo, gh, note, cfg.Scanner)
 

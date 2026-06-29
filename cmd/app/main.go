@@ -53,6 +53,12 @@ func (c *Config) validate() error {
 	if err := c.Log.Validate(); err != nil {
 		return err
 	}
+	if c.NotifierTransport != "grpc" && c.NotifierTransport != "rest" {
+		return fmt.Errorf("invalid NOTIFIER_TRANSPORT %q (want grpc or rest)", c.NotifierTransport)
+	}
+	if c.NotifierTransport == "rest" && c.NotifierRESTURL == "" {
+		return fmt.Errorf("NOTIFIER_REST_URL is required when NOTIFIER_TRANSPORT=rest")
+	}
 	return nil
 }
 
@@ -116,20 +122,15 @@ func run() error {
 
 	var sender service.EmailSender
 	switch cfg.NotifierTransport {
-	case "grpc":
+	case "rest":
+		sender = notifierclient.NewHTTPSender(cfg.NotifierRESTURL, cfg.NotifierToken)
+	default: // grpc; NOTIFIER_TRANSPORT is validated in Config.validate
 		notifierConn, err := notifierclient.Dial(cfg.NotifierAddr, cfg.NotifierToken)
 		if err != nil {
 			return fmt.Errorf("dial notifier: %w", err)
 		}
 		defer func() { _ = notifierConn.Close() }()
 		sender = notifierConn
-	case "rest":
-		if cfg.NotifierRESTURL == "" {
-			return fmt.Errorf("NOTIFIER_REST_URL is required when NOTIFIER_TRANSPORT=rest")
-		}
-		sender = notifierclient.NewHTTPSender(cfg.NotifierRESTURL, cfg.NotifierToken)
-	default:
-		return fmt.Errorf("invalid NOTIFIER_TRANSPORT %q (want grpc or rest)", cfg.NotifierTransport)
 	}
 
 	note := service.NewEmailNotifier(cfg.BaseURL, sender)

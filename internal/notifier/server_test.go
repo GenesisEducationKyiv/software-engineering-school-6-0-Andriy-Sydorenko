@@ -23,7 +23,8 @@ func (m *stubMailer) Send(_ context.Context, _, _, _ string) error {
 	return m.err
 }
 
-// timeoutErr satisfies net.Error with Timeout()==true (a transient failure).
+// timeoutErr satisfies net.Error; Temporary is deprecated but still part of the
+// interface, so it must be implemented for errors.As(&net.Error) to match.
 type timeoutErr struct{}
 
 func (timeoutErr) Error() string   { return "i/o timeout" }

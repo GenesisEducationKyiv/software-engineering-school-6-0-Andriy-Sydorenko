@@ -63,4 +63,17 @@ func TestSendEmailRESTHandler(t *testing.T) {
 			t.Fatalf("mailer calls = %d, want 1", mailer.calls)
 		}
 	})
+
+	t.Run("non-POST returns 405 with Allow header", func(t *testing.T) {
+		h := SendEmailRESTHandler(&stubMailer{}, "")
+		req := httptest.NewRequest(http.MethodGet, "/v1/send-email", http.NoBody)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, want 405", rec.Code)
+		}
+		if got := rec.Header().Get("Allow"); got != http.MethodPost {
+			t.Fatalf("Allow = %q, want POST", got)
+		}
+	})
 }

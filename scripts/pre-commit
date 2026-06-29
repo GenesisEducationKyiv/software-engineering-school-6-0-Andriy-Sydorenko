@@ -12,6 +12,8 @@ if command -v buf >/dev/null 2>&1; then
     echo "buf lint failed — fix the .proto contract before committing."
     exit 1
   fi
+else
+  echo "WARNING: buf not installed — proto linting skipped. Install: https://buf.build/docs/installation"
 fi
 
 if ! make verify-mocks; then

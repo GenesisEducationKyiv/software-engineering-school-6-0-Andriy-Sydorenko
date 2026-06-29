@@ -66,6 +66,7 @@ func buildMIME(from, to, subject, htmlBody string) []byte {
 	return []byte(b.String())
 }
 
+// maskEmail keeps logs PII-safe: "alice@example.com" -> "a***@example.com".
 func maskEmail(email string) string {
 	at := strings.IndexByte(email, '@')
 	if at <= 0 {

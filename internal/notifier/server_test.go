@@ -3,6 +3,8 @@ package notifier
 import (
 	"context"
 	"errors"
+	"fmt"
+	"syscall"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -46,6 +48,9 @@ func TestGRPCServer_SendEmail(t *testing.T) {
 		{"missing subject", &notifierpb.SendEmailRequest{RecipientEmail: "u@e.com", HtmlBody: "b"}, nil, codes.InvalidArgument},
 		{"missing html_body", &notifierpb.SendEmailRequest{RecipientEmail: "u@e.com", Subject: "s"}, nil, codes.InvalidArgument},
 		{"transient smtp", validReq, timeoutErr{}, codes.Unavailable},
+		{"transient connrefused", validReq, fmt.Errorf("dial: %w", syscall.ECONNREFUSED), codes.Unavailable},
+		{"transient connreset", validReq, fmt.Errorf("write: %w", syscall.ECONNRESET), codes.Unavailable},
+		{"transient epipe", validReq, fmt.Errorf("write: %w", syscall.EPIPE), codes.Unavailable},
 		{"permanent smtp", validReq, errors.New("550 mailbox unavailable"), codes.Internal},
 	}
 

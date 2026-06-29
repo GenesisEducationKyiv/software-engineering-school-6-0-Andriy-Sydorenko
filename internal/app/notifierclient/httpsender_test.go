@@ -70,4 +70,17 @@ func TestHTTPSender_SendEmail(t *testing.T) {
 			t.Fatal("Authorization header should be absent when token is empty")
 		}
 	})
+
+	t.Run("cancelled context returns error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer srv.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := NewHTTPSender(srv.URL, "").SendEmail(ctx, "u@e.com", "subj", "<p>b</p>"); err == nil {
+			t.Fatal("expected error for cancelled context")
+		}
+	})
 }

@@ -64,12 +64,14 @@ Handler  →  Service  →  Repository  →  Database
 
 ## Operations
 
-Layering invariants are enforced by code review today:
-- no `gin` imports outside `internal/api`;
-- no GORM imports outside `internal/repository`;
-- no `internal/domain` import of any other `internal/*` package.
+Layering invariants are enforced mechanically, not by review:
+- no `gin` imports outside `internal/app/api`;
+- no GORM imports outside `internal/app/db` / `internal/app/repository`;
+- `internal/app/domain` imports no other `internal/*` package;
+- the core (`internal/app/*`, `cmd/app`) never imports the notifier service-core (`internal/notifier`) — the gRPC boundary from ADR-012;
+- nothing inward imports the `api` layer.
 
-`depguard` or `go-arch-lint` can mechanize these rules once the team grows past one engineer.
+`tests/architecture/arch_test.go` walks the module's `go list` import graph and fails on any forbidden edge; it runs in `make test-unit` (no build tag, no Docker). `depguard` (`.golangci.yml`) additionally blocks the `internal/app → internal/notifier` edge at lint time. Package paths moved under `internal/app/` when the notifier was extracted (ADR-012); the layering itself is unchanged.
 
 ---
 

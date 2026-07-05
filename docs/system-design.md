@@ -4,7 +4,7 @@
 
 A small Go service that lets users subscribe by email to GitHub release notifications for a chosen public repository. Users confirm via a link in a confirmation email; a background scanner polls GitHub on a fixed interval and emails subscribers when a new release tag appears.
 
-Single binary. PostgreSQL is the source of truth. Redis caches GitHub API responses. SMTP delivers mail. No external queue, no microservices.
+Two binaries from one Go module: a **core** (`cmd/app`) that owns subscriptions, release scanning, and email composition, and an extracted **notifier** microservice (`cmd/notifier`) that delivers mail — reached over gRPC. PostgreSQL is the source of truth. Redis caches GitHub API responses. The notifier speaks SMTP. No external queue. Service split and rationale: [`microservices.md`](microservices.md) and ADR-012.
 
 ---
 
@@ -51,25 +51,41 @@ Subscribers scale independently (DB rows, SMTP fan-out). The ceiling is **distin
 
 ```mermaid
 flowchart LR
-    User([User]) -->|HTTP| API[API: Gin]
-    User -->|click confirm/unsubscribe link| API
-    SMTP[(SMTP relay)] -->|email| User
+    User([User])
 
-    subgraph App [single Go binary]
-      API --> Service[Service layer]
-      Scanner[Scanner ticker] --> Service
-      Service --> Repo[Repository]
-      Service --> GH[GitHub client]
-      Service --> Notifier[Notifier]
+    subgraph core [cmd/app — core binary]
+      direction TB
+      API[api: Gin handlers]
+      SVC[service: business logic + email composer]
+      SCAN[scanner: SCAN_INTERVAL ticker]
+      REPO[repository: GORM]
+      NC[notifierclient: gRPC stub]
+      GH[github client: REST + Redis cache]
+      API --> SVC
+      SCAN --> SVC
+      SVC --> REPO
+      SVC --> GH
+      SCAN --> GH
+      SVC --> NC
+      SCAN --> NC
     end
 
-    Repo --> PG[(PostgreSQL)]
+    subgraph notifier [cmd/notifier — microservice]
+      NS[gRPC SendEmail server, stateless]
+    end
+
+    User -->|HTTP/JSON| API
+    REPO --> PG[(PostgreSQL)]
     GH --> Cache[(Redis cache)]
     GH -->|REST| GitHub([api.github.com])
-    Notifier --> SMTP
+    NC -->|SendEmail: gRPC, bearer-auth'd| NS
+    NS -->|SMTP| SMTP[(SMTP relay)]
+    SMTP -->|email| User
 ```
 
-**Layering** is strict: handlers parse HTTP, services own business logic, repositories own SQL. Handlers never touch GORM; services never see `gin.Context`.
+The one network boundary is **core ↔ notifier** (gRPC); everything else inside `cmd/app` is in-process. The core renders each email and the notifier is a stateless SMTP sink — see [`microservices.md`](microservices.md) and ADR-012.
+
+**Layering** is strict: handlers parse HTTP, services own business logic, repositories own SQL. Handlers never touch GORM; services never see `gin.Context`. The dependency direction (`api → service → repository → domain`, with `github` and `notifierclient` as service-owned adapters) is enforced mechanically — see §5.2.
 
 ---
 
@@ -77,13 +93,15 @@ flowchart LR
 
 | Component | Responsibility | Key dependencies |
 |---|---|---|
-| **API** (`internal/api`) | HTTP routing, input parsing, domain-error → HTTP-status mapping, HTML subscription page, `/health`. | Gin |
-| **Service** (`internal/service`) | All business logic: validation, token generation, orchestration of repo + GitHub + notifier. Raises domain sentinel errors. | none (depends on consumer-defined interfaces) |
-| **Repository** (`internal/repository`) | SQL via GORM. No business logic. Returns ORM models. | GORM |
-| **GitHub client** (`internal/github`) | Authenticated REST calls; rate-limit handling; optional Redis cache wrapper. | net/http, Redis |
-| **Scanner** (`internal/scanner`) | Ticker-driven goroutine; iterates confirmed subs, polls GitHub, updates `last_seen_tag`, hands off new releases to the notifier. | service, GitHub client |
-| **Notifier** (`internal/notifier`) | SMTP send; embedded HTML + plaintext templates; `List-Unsubscribe` headers. | net/smtp |
-| **Composition root** (`cmd/server/main.go`) | Wires everything; owns graceful shutdown. | all of the above |
+| **API** (`internal/app/api`) | HTTP routing, input parsing, domain-error → HTTP-status mapping, HTML subscription page, `/health`, `/metrics`. | Gin |
+| **Service** (`internal/app/service`) | All business logic: validation, token generation, email composition, orchestration of repo + GitHub + notifier client. Raises domain sentinel errors. | none (depends on consumer-defined interfaces) |
+| **Repository** (`internal/app/repository`) | SQL via GORM. No business logic. Returns ORM models. | GORM |
+| **GitHub client** (`internal/app/github`) | Authenticated REST calls; rate-limit handling; optional Redis cache wrapper. | net/http, Redis |
+| **Scanner** (`internal/app/scanner`) | Ticker-driven goroutine; iterates confirmed subs, polls GitHub, updates `last_seen_tag`, hands off new releases via the notifier client. | service, GitHub client |
+| **Notifier client** (`internal/app/notifierclient`) | gRPC stub the core dials for delivery; attaches the internal bearer token. Renders nothing — sends a finished email over the wire. | gRPC |
+| **Notifier service** (`cmd/notifier`, `internal/notifier`) | Separate process. Stateless gRPC `SendEmail` server → SMTP delivery; admin `/metrics`. | gRPC, net/smtp |
+| **Shared** (`internal/shared/*`) | Cross-binary code: `config`, generated `notifierpb`, `observability` (slog, metrics, gRPC middleware). | — |
+| **Composition roots** (`cmd/app/main.go`, `cmd/notifier/main.go`) | One per binary; each wires its graph and owns graceful shutdown. | its own layers |
 
 ### 5.1 Scanner concurrency contract
 
@@ -91,6 +109,29 @@ flowchart LR
 - **Per-call deadline.** Every GitHub request runs under `context.WithTimeout(GITHUB_TIMEOUT)` (default 10 s). A hung repo cannot stall the tick.
 - **Per-tick budget.** Total tick duration is bounded by `SCAN_INTERVAL`; if a tick exceeds `0.8 × SCAN_INTERVAL`, the next tick is skipped rather than queued.
 - **Single-owner invariant.** Exactly one process runs the scanner. Today the deployment is single-replica, so the invariant holds by construction. Stage 2 of §10 introduces a Postgres advisory-lock leader election (`pg_try_advisory_lock`) so workers without the lock idle.
+
+### 5.2 Layering & dependency enforcement
+
+The core's packages form a strict dependency stack; adapters (`github`, `notifierclient`) hang off the service layer, and `domain` is a leaf every layer depends on but which depends on nothing.
+
+```mermaid
+flowchart TD
+    API[api — Gin handlers] --> SVC[service — business logic]
+    SCAN[scanner — ticker] --> SVC
+    SVC --> REPO[repository — GORM]
+    SVC --> GH[github — adapter]
+    SVC --> NC[notifierclient — gRPC adapter]
+    REPO --> DOM[domain — models, DTOs, sentinel errors]
+    SVC --> DOM
+    API --> DOM
+```
+
+The invariants (`gin` only in `api`, `gorm` only in `db`/`repository`, `domain` imports no other internal package, the core never imports the notifier service-core, and nothing inward imports `api`) are enforced mechanically, not by review:
+
+- **`tests/architecture/arch_test.go`** walks the module's `go list` import graph and fails on any forbidden edge. It runs in `make test-unit` — no build tag, no Docker.
+- **`depguard`** (in `.golangci.yml`) additionally blocks `internal/app → internal/notifier` at lint time, catching the service-boundary violation before tests run.
+
+See ADR-007 (layering) and ADR-012 (notifier boundary).
 
 ---
 
@@ -319,7 +360,7 @@ All configuration is via environment variables (12-factor). No config files.
 - **Compose.** `docker-compose.yml` brings up Postgres + Redis + app for local dev. The container entrypoint runs `migrate up` before exec'ing the binary; the app waits on DB and Redis healthchecks before starting.
 - **Replicas.** Today: 1. Running more than one requires the advisory-lock leader election in §5.1; until then, the single-owner scanner invariant holds only at one replica. API replicas are otherwise stateless behind any L4/L7 load balancer.
 - **Probes.** `GET /health` for liveness (process is up). `GET /ready` (proposed) for readiness - 200 only if DB and (when configured) Redis are reachable.
-- **Graceful shutdown.** SIGTERM → stop accepting new HTTP, drain in-flight requests with deadline `SHUTDOWN_TIMEOUT` (default 30 s), stop the scanner ticker, flush in-flight SMTP sends, close the DB pool. Owned by `cmd/server/main.go`.
+- **Graceful shutdown.** SIGTERM → stop accepting new HTTP, drain in-flight requests with deadline `SHUTDOWN_TIMEOUT` (default 30 s), stop the scanner ticker, flush in-flight SMTP sends, close the DB pool. Owned by `cmd/app/main.go`; the notifier drains its gRPC server (`GracefulStop`) in `cmd/notifier/main.go`.
 
 ---
 

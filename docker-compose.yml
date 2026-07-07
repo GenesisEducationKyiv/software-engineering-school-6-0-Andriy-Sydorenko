@@ -26,13 +26,17 @@ services:
       retries: 10
 
   app:
-    build: .
+    build:
+      context: .
+      target: app
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      notifier:
+        condition: service_started
     environment:
       DB_HOST: db
       DB_PORT: 5432
@@ -43,15 +47,31 @@ services:
       PORT: 8080
       BASE_URL: ${BASE_URL:-http://localhost:8080}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      NOTIFIER_GRPC_ADDR: notifier:9090
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
+      SCAN_INTERVAL: ${SCAN_INTERVAL:-5m}
+      API_KEY: ${API_KEY:-}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    ports:
+      - "${PORT:-8080}:8080"
+
+  notifier:
+    build:
+      context: .
+      target: notifier
+    restart: unless-stopped
+    environment:
+      PORT: 9090
+      ADMIN_ADDR: ":9091"
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME}
       SMTP_PASSWORD: ${SMTP_PASSWORD}
-      SCAN_INTERVAL: ${SCAN_INTERVAL:-5m}
-      API_KEY: ${API_KEY:-}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    ports:
-      - "${PORT:-8080}:8080"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
 
 volumes:
   pgdata:

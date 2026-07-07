@@ -1,4 +1,6 @@
-# repo-release-notifier
+# RelEasely
+
+> Ship happens. We'll tell you.
 
 A small Go service that lets people subscribe (by email) to GitHub
 release notifications for a given repository. Users confirm via a

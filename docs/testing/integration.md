@@ -32,63 +32,6 @@ layer says nothing about real upstream behaviour. Both are exercised
 end-to-end in the e2e suite via real `github.Client` against an
 `httptest.Server` fixture and real SMTP through Mailpit.
 
-## What's tested and why
-
-The suite is two files. `harness_test.go` is plumbing; `api_test.go` is
-where the assertions live. The interesting cases:
-
-### `POST /api/subscribe`
-
-- **Happy path** — subscription row written, mailer called with the
-  right tokens.
-- **Missing key → 401, wrong key → 403** — middleware mount is right
-  and the error codes are distinguished (401 vs 403 matters for
-  client retry logic).
-- **Invalid repo format → 400 *without GitHub being called*** —
-  cheap-input rejection happens before the upstream call (a regression
-  here spends an extra GitHub call on every malformed request).
-- **Malformed JSON → 400** — gin's bind errors are mapped, not
-  surfaced as 500s.
-- **Duplicate → 409, no second mailer call** — idempotency at the
-  service layer; mail isn't sent twice.
-- **Repo not found → 404, no rows written** — service rolls back the
-  pending insertion when validation fails (subscriptions table stays
-  clean).
-- **Upstream rate-limited → 503** — sentinel propagation, with the
-  client signal to retry.
-
-### `GET /api/confirm/:token`
-
-- **Happy path** — `confirmed=true` flipped on the subscription, the
-  token row deleted (one-shot).
-- **Unknown token → 404** — no DB writes on a miss; nothing leaks.
-
-### `GET /api/unsubscribe/:token`
-
-- **Happy path** — subscription hard-deleted, observable through a
-  zero row-count query on the email.
-- **Unknown token → 404** — same isolation as confirm.
-
-### `POST /api/unsubscribe/:token`
-
-- **RFC 8058 one-click unsubscribe** — Gmail and Yahoo issue a `POST`
-  with `List-Unsubscribe=One-Click` (no body). The test proves the
-  POST variant exists and works unauthenticated (per the RFC).
-
-### `GET /api/subscriptions`
-
-- **Email filter is a hard boundary** — no cross-email leak. A
-  regression here is a privacy bug.
-- **Missing key → 401** — admin-only endpoint, must enforce auth.
-- **Invalid email → 400** — query-string validation happens before
-  the DB query.
-
-### `GET /health` and `GET /`
-
-- Smoke checks: 200 + body shape on health, 200 + `text/html`
-  + contains `<html` on the index. Not deep — exists so the routing
-  contract is asserted alongside everything else.
-
 ## What's wired vs stubbed
 
 | Layer | Real | Stubbed |

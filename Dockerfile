@@ -11,22 +11,31 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY . .
 
-# Static binary, stripped, reproducible.
+# Static, stripped, reproducible binaries for both services.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux \
-    go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/server
+    go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/app && \
+    go build -trimpath -ldflags="-s -w" -o /out/notifier ./cmd/notifier
 
-# ---- runtime stage --------------------------------------------------------
-FROM alpine:3.20
+# ---- runtime base ---------------------------------------------------------
+FROM alpine:3.20 AS runtime-base
 
 RUN apk add --no-cache ca-certificates tzdata \
  && addgroup -S app && adduser -S -G app app
 
 WORKDIR /app
-COPY --from=builder /out/app /app/app
-COPY --from=builder /src/internal/templates /app/internal/templates
-
 USER app
+
+# ---- app image (HTTP API + scanner) ---------------------------------------
+# HTML templates are go:embed-ed into the binary — nothing else to copy.
+FROM runtime-base AS app
+COPY --from=builder /out/app /app/app
 EXPOSE 8080
 ENTRYPOINT ["/app/app"]
+
+# ---- notifier image (gRPC) ------------------------------------------------
+FROM runtime-base AS notifier
+COPY --from=builder /out/notifier /app/notifier
+EXPOSE 9090
+ENTRYPOINT ["/app/notifier"]

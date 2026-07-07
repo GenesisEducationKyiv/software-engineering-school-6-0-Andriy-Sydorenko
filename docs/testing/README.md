@@ -89,9 +89,12 @@ make test    # unit, then integration, then e2e
 Each suite has its own GitHub Actions workflow so failures don't
 cross pipelines:
 
-| Workflow                                  | Purpose |
+Each runs the `go test` invocation inline (not the make target — the targets
+above are the local equivalents):
+
+| Workflow                                  | Runs |
 |-------------------------------------------|---|
-| `.github/workflows/unit-tests.yml`        | `make test-unit` |
-| `.github/workflows/integration-tests.yml` | `make test-integration` |
-| `.github/workflows/e2e-tests.yml`         | `make test-e2e` (Chromium pulled as a Docker image) |
+| `.github/workflows/unit-tests.yml`        | `go test ./... -race -count=1` |
+| `.github/workflows/integration-tests.yml` | `go test -tags=integration -timeout=2m ./tests/integration/...` |
+| `.github/workflows/e2e-tests.yml`         | `go test -tags=e2e -timeout=10m ./tests/e2e/...` (Chromium via testcontainers sidecar) |
 | `.github/workflows/lint.yml`              | `golangci-lint` + `make verify-mocks` |

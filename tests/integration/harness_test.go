@@ -17,10 +17,11 @@ import (
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"gorm.io/gorm"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/api"
-	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/db"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/repository"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/service"
+	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/db"
+
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/api"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
 )
 
 const testAPIKey = "test-api-key"
@@ -73,7 +74,10 @@ type sentMail struct {
 	unsubToken string
 }
 
-func (m *stubMailer) SendConfirmation(_ context.Context, email, repo, token, unsubToken string) error {
+func (m *stubMailer) SendConfirmation(
+	_ context.Context,
+	email, repo, token, unsubToken string,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
@@ -108,7 +112,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	gh := &stubGitHub{}
 	mailer := &stubMailer{}
 	repo := repository.New(db)
-	svc := service.New(repo, gh, mailer, service.RandomToken)
+	svc := service.New(repo, repo, gh, mailer, service.RandomToken)
 	router := api.NewRouter(api.NewHandler(svc), testAPIKey)
 
 	return &testEnv{
@@ -121,9 +125,11 @@ func newTestEnv(t *testing.T) *testEnv {
 
 func mustSharedDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	sharedDBOnce.Do(func() {
-		sharedDB, sharedDBErr = startPostgres()
-	})
+	sharedDBOnce.Do(
+		func() {
+			sharedDB, sharedDBErr = startPostgres()
+		},
+	)
 	if sharedDBErr != nil {
 		t.Fatalf("postgres container setup: %v", sharedDBErr)
 	}
@@ -135,7 +141,8 @@ func startPostgres() (*gorm.DB, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	c, err := tcpg.Run(ctx,
+	c, err := tcpg.Run(
+		ctx,
 		"postgres:16-alpine",
 		tcpg.WithDatabase("test"),
 		tcpg.WithUsername("test"),
@@ -191,7 +198,7 @@ func openWithRetry(dsn string, attempts int, delay time.Duration) (*gorm.DB, err
 
 func truncateAll(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	if err := db.Exec(`TRUNCATE TABLE confirmation_tokens, subscriptions RESTART IDENTITY CASCADE`).Error; err != nil {
+	if err := db.Exec(`TRUNCATE TABLE confirmation_tokens, subscriptions, watched_repos RESTART IDENTITY CASCADE`).Error; err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }

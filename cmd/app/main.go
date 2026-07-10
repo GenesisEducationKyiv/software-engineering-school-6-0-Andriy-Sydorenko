@@ -22,6 +22,7 @@ import (
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/config"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notify"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/logging"
 
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/db"
@@ -116,6 +117,11 @@ func run() error {
 	defer func() { _ = nc.Drain() }()
 	if err := natsbus.EnsureStreams(context.Background(), js); err != nil {
 		return fmt.Errorf("ensure streams: %w", err)
+	}
+	if err := natsbus.SetDedupWindow(
+		context.Background(), js, notify.DedupWindow(cfg.Scanner.Interval),
+	); err != nil {
+		return fmt.Errorf("set dedup window: %w", err)
 	}
 
 	note := service.NewEmailNotifier(cfg.BaseURL, natspublisher.New(js))

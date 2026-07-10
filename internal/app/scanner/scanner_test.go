@@ -185,9 +185,10 @@ func TestPanicInOneRepoDoesNotKillCycle(t *testing.T) {
 	f.scanner.runOnce(context.Background())
 }
 
-func TestSaveTagFailureSkipsNotification(t *testing.T) {
-	// Persist precedes notify — a failed persist re-fires next scan instead of
-	// notifying on a cursor that didn't move.
+func TestSendFailureKeepsCursor(t *testing.T) {
+	// A failed send must NOT advance the cursor: the next scan has to re-detect
+	// the release and retry. No SaveWatchedRepoTag EXPECT — gomock fails if it's
+	// called.
 	f := newFixture(t)
 	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
 	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
@@ -199,10 +200,34 @@ func TestSaveTagFailureSkipsNotification(t *testing.T) {
 			{ID: 1, Email: "a@x.com", Repo: "golang/go", UnsubscribeToken: "u"},
 		}, nil,
 	)
+	f.notifier.EXPECT().SendReleaseNotification(
+		gomock.Any(), "a@x.com", "golang/go", "v1.1", "u",
+	).Return(errors.New("nats down"))
+
+	f.scanner.runOnce(context.Background())
+}
+
+func TestSaveTagFailureAfterNotifyIsTolerated(t *testing.T) {
+	// Notify precedes persist. A failed persist after a successful send is
+	// harmless: the next scan re-publishes and the per-recipient dedup id
+	// suppresses the copy already delivered.
+	f := newFixture(t)
+	f.repo.EXPECT().FindDistinctConfirmedRepos(gomock.Any()).Return([]string{"golang/go"}, nil)
+	f.github.EXPECT().GetLatestRelease(gomock.Any(), "golang", "go").Return("v1.1", nil)
+	f.repo.EXPECT().GetWatchedRepo(gomock.Any(), "golang/go").Return(
+		&domain.WatchedRepo{Repo: "golang/go", LastSeenTag: "v1.0"}, nil,
+	)
+	f.repo.EXPECT().FindConfirmedSubscriptionsByRepo(gomock.Any(), "golang/go").Return(
+		[]domain.Subscription{
+			{ID: 1, Email: "a@x.com", Repo: "golang/go", UnsubscribeToken: "u"},
+		}, nil,
+	)
+	f.notifier.EXPECT().SendReleaseNotification(
+		gomock.Any(), "a@x.com", "golang/go", "v1.1", "u",
+	).Return(nil)
 	f.repo.EXPECT().SaveWatchedRepoTag(
 		gomock.Any(), "golang/go", "v1.1",
 	).Return(errors.New("db write failed"))
-	// No Send EXPECT.
 
 	f.scanner.runOnce(context.Background())
 }

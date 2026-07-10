@@ -2,6 +2,7 @@ package natsbus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -13,16 +14,21 @@ import (
 )
 
 func Connect(url string) (*nats.Conn, jetstream.JetStream, error) {
-	nc, err := nats.Connect(url,
+	nc, err := nats.Connect(
+		url,
 		nats.Name("repo-release-notifier"),
 		nats.MaxReconnects(-1), // never stop retrying through outages
 		nats.ReconnectWait(2*time.Second),
-		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
-			slog.Warn("nats disconnected", "err", err)
-		}),
-		nats.ReconnectHandler(func(c *nats.Conn) {
-			slog.Info("nats reconnected", "url", c.ConnectedUrl())
-		}),
+		nats.DisconnectErrHandler(
+			func(_ *nats.Conn, err error) {
+				slog.Warn("nats disconnected", "err", err)
+			},
+		),
+		nats.ReconnectHandler(
+			func(c *nats.Conn) {
+				slog.Info("nats reconnected", "url", c.ConnectedUrl())
+			},
+		),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("nats connect %q: %w", url, err)
@@ -36,13 +42,13 @@ func Connect(url string) (*nats.Conn, jetstream.JetStream, error) {
 }
 
 func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
-	if _, err := js.CreateOrUpdateStream(
+	if _, err := js.CreateStream(
 		ctx, jetstream.StreamConfig{
 			Name:     notify.StreamName,
 			Subjects: []string{notify.StreamSubject},
 			Storage:  jetstream.FileStorage,
 		},
-	); err != nil {
+	); err != nil && !errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
 		return fmt.Errorf("ensure stream %s: %w", notify.StreamName, err)
 	}
 	if _, err := js.CreateOrUpdateStream(
@@ -53,6 +59,20 @@ func EnsureStreams(ctx context.Context, js jetstream.JetStream) error {
 		},
 	); err != nil {
 		return fmt.Errorf("ensure stream %s: %w", notify.DLQStreamName, err)
+	}
+	return nil
+}
+
+func SetDedupWindow(ctx context.Context, js jetstream.JetStream, window time.Duration) error {
+	if _, err := js.CreateOrUpdateStream(
+		ctx, jetstream.StreamConfig{
+			Name:       notify.StreamName,
+			Subjects:   []string{notify.StreamSubject},
+			Storage:    jetstream.FileStorage,
+			Duplicates: window,
+		},
+	); err != nil {
+		return fmt.Errorf("set dedup window on %s: %w", notify.StreamName, err)
 	}
 	return nil
 }

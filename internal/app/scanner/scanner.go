@@ -121,9 +121,8 @@ func (s *Scanner) runOnce(ctx context.Context) {
 	)
 }
 
-// safeCheckRepo recovers from panics so one bad repo doesn't tear down
-// the worker pool. The panic is logged once here and the caller sees nil
-// — it's a terminal event for that repo, not a propagatable error.
+// safeCheckRepo turns a panic in one repo into a logged, non-fatal nil so the
+// worker pool keeps dispatching.
 func (s *Scanner) safeCheckRepo(ctx context.Context, repo string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -154,9 +153,8 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		return err
 	}
 
-	// No new release, or first sighting: record the poll (stamps last_polled_at,
-	// and baselines the tag on first sighting) and stop. A first sighting is
-	// silent — the current release predates every subscription.
+	// No new release, or first sighting: record the poll and stop. First sighting
+	// is silent — the release predates every subscription.
 	if watched == nil || !watched.IsNewRelease(tag) {
 		return s.repo.SaveWatchedRepoTag(ctx, repo, tag)
 	}
@@ -166,18 +164,10 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		return err
 	}
 
-	// Advance the cursor before notifying: a failed persist re-fires next scan
-	// (no missed release) rather than letting a successful notify re-send.
-	if err := s.repo.SaveWatchedRepoTag(ctx, repo, tag); err != nil {
-		slog.ErrorContext(
-			ctx, "scanner: failed to save watched repo tag",
-			"repo", repo,
-			"tag", tag,
-			"err", err,
-		)
-		return nil
-	}
-
+	// Notify before advancing the cursor: on any send failure the cursor stays
+	// put so the next scan retries, and the per-recipient dedup id makes that
+	// redelivery idempotent — exactly one email per subscriber.
+	allSent := true
 	for i := range subs {
 		sub := &subs[i]
 		// Per-call deadline so a stalled NATS publish can't pin a worker slot.
@@ -191,6 +181,7 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 		)
 		cancel()
 		if err != nil {
+			allSent = false
 			// sub.ID is logged in place of sub.Email — email is PII
 			slog.ErrorContext(
 				ctx, "scanner: failed to send release notification",
@@ -200,6 +191,19 @@ func (s *Scanner) checkRepo(ctx context.Context, repo string) error {
 				"err", err,
 			)
 		}
+	}
+
+	if !allSent {
+		return nil
+	}
+
+	if err := s.repo.SaveWatchedRepoTag(ctx, repo, tag); err != nil {
+		slog.ErrorContext(
+			ctx, "scanner: failed to save watched repo tag",
+			"repo", repo,
+			"tag", tag,
+			"err", err,
+		)
 	}
 
 	return nil

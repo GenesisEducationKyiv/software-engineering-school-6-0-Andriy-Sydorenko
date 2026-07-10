@@ -1,6 +1,8 @@
-// Package notify holds the wire contract shared between the core publisher and
-// the notifier consumer: the email command payload, NATS subjects, and dedup ids.
 package notify
+
+import (
+	"time"
+)
 
 const (
 	StreamName    = "NOTIFICATIONS"
@@ -14,6 +16,10 @@ const (
 	DLQStreamName = "NOTIFY_DLQ"
 	DLQSubject    = "dlq.notify"
 )
+
+func DedupWindow(scanInterval time.Duration) time.Duration {
+	return 3 * scanInterval
+}
 
 type EmailCommand struct {
 	EventID        string `json:"event_id"`

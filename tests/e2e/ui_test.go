@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 	"github.com/stretchr/testify/suite"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/tests/e2e/harness"

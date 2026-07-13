@@ -28,6 +28,12 @@ go test ./... -race
 golangci-lint run ./...
 ```
 
+Regenerating the gRPC stubs (`make generate-proto`) or linting the
+proto contract (`make proto-lint`) additionally needs
+[`buf`](https://buf.build/docs/installation) on `PATH`
+(`brew install bufbuild/buf/buf`); the protoc plugins themselves are
+built automatically from versions pinned in `go.mod`.
+
 Only `DATABASE_URL` (or the split `DB_*` vars) and the SMTP
 credentials are strictly required. `REDIS_URL`, `GITHUB_TOKEN` and
 `API_KEY` are optional but anything resembling production should

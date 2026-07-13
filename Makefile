@@ -17,10 +17,12 @@ generate-mocks:
 # Regenerate gRPC stubs from the .proto. Plugins are built from the versions
 # pinned by the go.mod tool directives (no global install), so generated code
 # can't drift. Output lands next to the .proto via paths=source_relative.
+# Requires buf on PATH (see README "Running"): brew install bufbuild/buf/buf
 generate-proto:
 	go build -o bin/ google.golang.org/protobuf/cmd/protoc-gen-go google.golang.org/grpc/cmd/protoc-gen-go-grpc
 	PATH="$(CURDIR)/bin:$$PATH" buf generate
 
+# Lint the .proto contract. Requires buf on PATH (see README "Running").
 proto-lint:
 	buf lint
 

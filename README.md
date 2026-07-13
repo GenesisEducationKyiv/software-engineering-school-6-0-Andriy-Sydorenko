@@ -7,8 +7,10 @@ release notifications for a given repository. Users confirm via a
 link in the confirmation email; a background scanner polls GitHub
 and sends a notification whenever the latest tag for a repo changes.
 
-Single binary, PostgreSQL for storage, optional Redis for caching
-GitHub API responses, SMTP for email.
+A modular core (`cmd/app`) plus an extracted **notifier** microservice
+(`cmd/notifier`), connected asynchronously by a **NATS + JetStream** broker.
+PostgreSQL for storage, optional Redis for caching GitHub API responses,
+SMTP for email.
 
 ---
 
@@ -17,13 +19,15 @@ GitHub API responses, SMTP for email.
 Live deployment: <https://repo-release-notifier.vercel.app>
 
 The expected path is `docker compose up --build`. That brings up
-Postgres, Redis and the app together; migrations run on startup.
+Postgres, Redis, NATS, the app and the notifier together; migrations
+run on startup.
 
 Locally, once `.env` is populated (`cp .env.example .env` and fill
 in SMTP credentials at minimum):
 
 ```
-go run ./cmd/server
+go run ./cmd/app        # core: HTTP API + scanner
+go run ./cmd/notifier   # notifier: NATS consumer → SMTP
 go test ./... -race
 golangci-lint run ./...
 ```
@@ -37,38 +41,53 @@ set all three — see the notes below for why.
 
 ## Architecture
 
-One process, four concerns:
+A modular **core** (`cmd/app`) plus an extracted **notifier** microservice
+(`cmd/notifier`), connected asynchronously over a **NATS + JetStream** broker.
+Topology and rationale: [docs/microservices.md](docs/microservices.md),
+[ADR-012](docs/adr/012-notifier-service-boundary.md) (boundary) and
+[ADR-013](docs/adr/013-message-broker-nats-jetstream.md) (broker).
+
+Core (`cmd/app`) — three concerns:
 
 - **HTTP API** (Gin) — the four endpoints from the swagger spec
   plus a `GET /` that serves an HTML subscription form and a
   `GET /health` for liveness.
 - **Service layer** — all business logic; validates input, talks
-  to the repository, the GitHub client and the notifier. Depends
-  on interfaces, not concrete types.
+  to the repository and the GitHub client, **renders** emails and
+  **publishes** them to the broker. Depends on interfaces, not concrete types.
 - **Scanner** — a ticker-driven goroutine that periodically
   iterates every confirmed subscription, checks GitHub for a new
-  release tag, updates `last_seen_tag`, and hands off to the
-  notifier when a new tag appears.
-- **Notifier** — SMTP sender that renders HTML + plaintext email
-  bodies from embedded templates.
+  release tag, updates `last_seen_tag`, and **publishes one
+  `notify.release` command per recipient** when a new tag appears.
+
+Notifier (`cmd/notifier`) — a stateless **JetStream consumer** that delivers
+each pre-rendered command over SMTP: ack on success, retry on failure,
+dead-letter poison messages. No templates, no DB.
 
 Packages follow the same shape:
 
 ```
-cmd/server/main.go           composition root + graceful shutdown
+cmd/app/main.go              core composition root (API + scanner + publisher)
+cmd/notifier/main.go         notifier composition root (JetStream consumer)
 
 internal/
-  domain/                    GORM models, DTOs, sentinel errors (no deps)
-  config/                    env loader
-  db/                        Postgres connection, migrations
-  api/                       HTTP handlers, middleware, router, pages
-  service/                   business logic, domain error mapping
-  repository/                GORM queries
-  github/                    GitHub client + optional Redis-cached wrapper
-  notifier/                  SMTP + template rendering
-  scanner/                   background release checker
-  cache/                     thin Redis wrapper
-  templates/                 embedded HTML (emails + pages)
+  app/                       the core service
+    domain/                  GORM models, DTOs, sentinel errors (no deps)
+    api/                     HTTP handlers, middleware, router, pages
+    service/                 business logic + email composition (templates)
+    repository/              GORM queries
+    scanner/                 background release checker
+    github/                  GitHub client + optional Redis-cached wrapper
+    cache/                   thin Redis wrapper
+    db/                      Postgres connection, migrations
+    natspublisher/           publishes rendered email commands to NATS
+    templates/               embedded HTML (emails + pages)
+  notifier/                  stateless SMTP sender + JetStream consumer
+  shared/
+    notify/                  EmailCommand wire contract + subjects
+    natsbus/                 NATS connect + JetStream stream setup
+    config/                  env helpers
+    observability/           structured slog logging
 ```
 
 The layering is strict:
@@ -76,7 +95,7 @@ The layering is strict:
 ```
 Handler  →  Service  →  Repository  →  DB
              ↘             ↘
-              GitHub        Notifier
+              GitHub        Publisher → NATS → Notifier → SMTP
 ```
 
 Handlers parse HTTP and map domain errors to status codes; they
@@ -87,9 +106,9 @@ declared at the consumer — `service.SubscriptionRepository`,
 defined where they're used, and the implementing packages satisfy
 them structurally. No DI framework.
 
-Domain types live in a leaf `internal/domain` package that imports
-nothing else, so there are no import cycles. `cmd/server/main.go`
-is the only place that wires the whole graph together.
+Domain types live in a leaf `internal/app/domain` package that imports
+nothing else, so there are no import cycles. Each binary's
+`cmd/*/main.go` is the only place that wires its graph together.
 
 ---
 
@@ -111,10 +130,11 @@ is the only place that wires the whole graph together.
 4. Generates a UUID v4 confirmation token plus a separate
    UUID v4 unsubscribe token (stored on the subscription row
    itself, long-lived, used in release emails).
-5. Persists the subscription with `confirmed = false` and fires
-   the confirmation email. An SMTP failure is logged but does not
-   fail the request: the row exists, the user can hit the confirm
-   link if the mail was delayed.
+5. Persists the subscription with `confirmed = false` and
+   **publishes a `notify.confirmation` command**. The email is sent
+   asynchronously by the notifier, so the request never blocks on SMTP;
+   at-least-once delivery means a transient SMTP failure is retried,
+   not lost (ADR-013).
 
 ### Confirm / Unsubscribe
 
@@ -139,7 +159,8 @@ so SIGINT/SIGTERM cleanly stops it. Each tick:
    subscription.
 2. For each repo: fetch `releases/latest`, then every confirmed
    subscriber on that repo. If the new tag matches the stored
-   `last_seen_tag`, skip. Otherwise update the tag and email.
+   `last_seen_tag`, skip. Otherwise update the tag and **publish one
+   `notify.release` command per subscriber** to the broker.
 3. If GitHub returns rate-limited, abort the entire cycle rather
    than burning further budget on guaranteed failures. Next tick
    retries normally.
@@ -153,6 +174,14 @@ first scan records the current tag but does **not** email — a new
 subscriber shouldn't immediately receive a notification for a
 release that happened a year ago. From the second scan onwards,
 a change triggers an email.
+
+### Late unsubscribe (accepted)
+
+Release recipients are resolved when the scan **publishes**, so a user
+who unsubscribes in the brief window between publish and send may still
+receive that one release email. This is deliberate — the same tolerance
+every email system has ("allow a few days for changes to take effect"),
+not a bug. See [ADR-013](docs/adr/013-message-broker-nats-jetstream.md).
 
 ---
 
@@ -272,6 +301,10 @@ benefit, so the endpoints stay REST-only.
 If this project ever grew a second Go service that wanted to
 subscribe/unsubscribe users programmatically in bulk, gRPC would
 start making sense. It doesn't today.
+
+(That's about the *public* API. The internal app→notifier hop was
+previously gRPC and is now an async **NATS + JetStream** broker — see
+[ADR-013](docs/adr/013-message-broker-nats-jetstream.md).)
 
 ---
 

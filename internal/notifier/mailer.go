@@ -45,7 +45,7 @@ func (m *SMTPMailer) Send(ctx context.Context, to, subject, htmlBody string) err
 		return ctx.Err()
 	case err := <-done:
 		if err != nil {
-			return fmt.Errorf("failed to send email to %s: %w", maskEmail(to), err)
+			return fmt.Errorf("failed to send email: %w", err)
 		}
 		return nil
 	}
@@ -61,13 +61,4 @@ func buildMIME(from, to, subject, htmlBody string) []byte {
 	fmt.Fprint(&b, "Content-Transfer-Encoding: 8bit\r\n\r\n")
 	fmt.Fprintf(&b, "%s\r\n", htmlBody)
 	return []byte(b.String())
-}
-
-// maskEmail keeps logs PII-safe: "alice@example.com" -> "a***@example.com".
-func maskEmail(email string) string {
-	at := strings.IndexByte(email, '@')
-	if at <= 0 {
-		return "***"
-	}
-	return email[:1] + "***" + email[at:]
 }

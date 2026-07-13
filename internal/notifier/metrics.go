@@ -1,34 +1,23 @@
 package notifier
 
 import (
-	"context"
-	"time"
-
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/status"
 )
 
-var grpcRequestDuration = promauto.NewHistogramVec(
-	prometheus.HistogramOpts{
-		Name:    "grpc_request_duration_seconds",
-		Help:    "gRPC unary request latency in seconds, labeled by method and status code.",
-		Buckets: prometheus.DefBuckets,
-	},
-	[]string{"method", "code"},
+var (
+	messagesTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "notify_messages_total",
+			Help: "Notification messages processed, by subject and outcome (ack/nak/term).",
+		},
+		[]string{"subject", "outcome"},
+	)
+	sendDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "notify_send_duration_seconds",
+			Help:    "Successful SMTP send latency in seconds.",
+			Buckets: prometheus.DefBuckets,
+		},
+	)
 )
-
-func MetricsInterceptor() grpc.UnaryServerInterceptor {
-	return func(
-		ctx context.Context, req any,
-		info *grpc.UnaryServerInfo, handler grpc.UnaryHandler,
-	) (any, error) {
-		start := time.Now()
-		resp, err := handler(ctx, req)
-		grpcRequestDuration.
-			WithLabelValues(info.FullMethod, status.Code(err).String()).
-			Observe(time.Since(start).Seconds())
-		return resp, err
-	}
-}

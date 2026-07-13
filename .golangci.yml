@@ -79,7 +79,7 @@ linters:
             - "**/cmd/app/**"
           deny:
             - pkg: github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier
-              desc: "the app must use internal/app/notifierclient (gRPC), not import the notifier service-core"
+              desc: "app and notifier communicate via NATS (internal/shared/notify + natsbus); the app must not import the notifier service-core"
 
   exclusions:
     rules:

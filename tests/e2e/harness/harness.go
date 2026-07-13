@@ -1,7 +1,7 @@
 //go:build e2e
 
 // Package harness boots an in-process app instance against ephemeral
-// Postgres + Mailpit containers, for use by e2e tests.
+// Postgres + Mailpit + NATS containers, for use by e2e tests.
 package harness
 
 import (
@@ -15,22 +15,22 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
-	"google.golang.org/grpc"
 	"gorm.io/gorm"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/api"
 	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/db"
 	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/github"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/notifierclient"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/natspublisher"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notifierpb"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/grpcmw"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
 )
 
 const (
@@ -40,11 +40,8 @@ const (
 	DefaultAPIKey     = "test-key"
 	pgImage           = "postgres:16-alpine"
 	mailpitImage      = "axllent/mailpit:v1.20"
+	natsImage         = "nats:2.10-alpine"
 	containerStartTTL = 90 * time.Second
-
-	// harnessInternalToken exercises the authenticated app → notifier gRPC path
-	// end-to-end (shared by the in-process server interceptor and the dial).
-	harnessInternalToken = "e2e-internal-token"
 )
 
 // Harness holds the live app + its dependencies and exposes the URLs tests
@@ -58,12 +55,13 @@ type Harness struct {
 	DB             *gorm.DB
 	GitHub         *GitHubFixture // nil when Options.GHValidator overrides it
 
-	pgC          testcontainers.Container
-	mailC        testcontainers.Container
-	browserC     testcontainers.Container
-	srv          *http.Server
-	grpcSrv      *grpc.Server
-	notifierConn *notifierclient.Client
+	pgC      testcontainers.Container
+	mailC    testcontainers.Container
+	natsC    testcontainers.Container
+	browserC testcontainers.Container
+	srv      *http.Server
+	natsConn *nats.Conn
+	consume  jetstream.ConsumeContext
 }
 
 // Options configures optional substitutions. Zero value = sensible defaults
@@ -80,7 +78,7 @@ type Options struct {
 	APIKey string
 }
 
-// New boots Postgres + Mailpit containers and a fresh in-process app,
+// New boots Postgres + Mailpit + NATS containers and a fresh in-process app,
 // returning a ready-to-use Harness. Cleanup is registered with t.
 func New(t *testing.T, opts ...Options) *Harness {
 	t.Helper()
@@ -91,6 +89,7 @@ func New(t *testing.T, opts ...Options) *Harness {
 
 	pgC := startPostgres(t, ctx)
 	mailC, smtpAddr, mailpitURL := startMailpit(t, ctx)
+	natsC, natsURL := startNATS(t, ctx)
 
 	dbURL, err := pgC.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
@@ -125,27 +124,23 @@ func New(t *testing.T, opts ...Options) *Harness {
 
 	repo := repository.New(db)
 
-	// Real notifier gRPC service, in-process, sending through Mailpit — so e2e
-	// exercises the actual app → gRPC → SMTP path, not a shortcut.
+	// Real notifier consumer, in-process, sending through Mailpit — so e2e
+	// exercises the actual publish → NATS → SMTP path, not a shortcut.
 	mailer := notifier.NewSMTPMailer(&notifier.Config{
 		Host:     smtpAddr.host,
 		Port:     smtpAddr.port,
 		Username: "harness@example.com",
 		Password: "harness",
 	})
-	grpcLis, err := net.Listen("tcp", "127.0.0.1:0")
+	natsConn, js, err := natsbus.Connect(natsURL)
 	require.NoError(t, err)
-	grpcSrv := grpc.NewServer(grpc.ChainUnaryInterceptor(grpcmw.AuthServerInterceptor(harnessInternalToken)))
-	notifierpb.RegisterNotifierServiceServer(grpcSrv, notifier.NewGRPCServer(mailer))
-	go func() {
-		if err := grpcSrv.Serve(grpcLis); err != nil {
-			log.Printf("harness notifier grpc: %v", err)
-		}
-	}()
-	notifierConn, err := notifierclient.Dial(grpcLis.Addr().String(), harnessInternalToken)
+	require.NoError(t, natsbus.EnsureStreams(ctx, js))
+	// context.Background(): the consumer must outlive New()'s startup ctx;
+	// it is stopped via consume.Stop() in shutdown().
+	consume, err := notifier.Subscribe(context.Background(), js, 5, 30*time.Second, notifier.NewHandler(mailer))
 	require.NoError(t, err)
 
-	note := service.NewEmailNotifier(baseURL, notifierConn)
+	note := service.NewEmailNotifier(baseURL, natspublisher.New(js))
 	svc := service.New(repo, repo, gh, note, service.RandomToken)
 	router := api.NewRouter(api.NewHandler(svc), o.APIKey)
 
@@ -174,10 +169,11 @@ func New(t *testing.T, opts ...Options) *Harness {
 		GitHub:         ghFix,
 		pgC:            pgC,
 		mailC:          mailC,
+		natsC:          natsC,
 		browserC:       browserC,
 		srv:            srv,
-		grpcSrv:        grpcSrv,
-		notifierConn:   notifierConn,
+		natsConn:       natsConn,
+		consume:        consume,
 	}
 	waitForHealth(t, h.BaseURL)
 	t.Cleanup(h.shutdown)
@@ -205,13 +201,14 @@ func (h *Harness) shutdown() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = h.srv.Shutdown(shutdownCtx)
-	_ = h.notifierConn.Close()
-	h.grpcSrv.GracefulStop()
+	h.consume.Stop()
+	_ = h.natsConn.Drain()
 	if h.GitHub != nil {
 		h.GitHub.close()
 	}
 	_ = h.pgC.Terminate(shutdownCtx)
 	_ = h.mailC.Terminate(shutdownCtx)
+	_ = h.natsC.Terminate(shutdownCtx)
 	if h.browserC != nil {
 		_ = h.browserC.Terminate(shutdownCtx)
 	}
@@ -272,6 +269,29 @@ func startMailpit(t *testing.T, ctx context.Context) (testcontainers.Container, 
 		host,
 		httpPort.Port(),
 	)
+}
+
+func startNATS(t *testing.T, ctx context.Context) (testcontainers.Container, string) {
+	t.Helper()
+	c, err := testcontainers.GenericContainer(
+		ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: testcontainers.ContainerRequest{
+				Image:        natsImage,
+				Cmd:          []string{"-js", "-m", "8222"},
+				ExposedPorts: []string{"4222/tcp"},
+				WaitingFor:   wait.ForLog("Server is ready").WithStartupTimeout(30 * time.Second),
+			},
+			Started: true,
+		},
+	)
+	require.NoError(t, err)
+
+	host, err := c.Host(ctx)
+	require.NoError(t, err)
+	port, err := c.MappedPort(ctx, "4222")
+	require.NoError(t, err)
+
+	return c, fmt.Sprintf("nats://%s:%s", host, port.Port())
 }
 
 func waitForHealth(t *testing.T, baseURL string) {

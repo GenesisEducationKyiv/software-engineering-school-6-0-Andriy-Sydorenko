@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,29 +14,37 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"google.golang.org/grpc"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/config"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notifierpb"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/grpcmw"
+	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/logging"
 
 	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
 )
 
-const envFile = ".env.notifier"
+const (
+	envFile      = ".env.notifier"
+	drainTimeout = 10 * time.Second
+)
 
 type Config struct {
-	SMTP          *notifier.Config
-	Log           *logging.Config
-	Port          string
-	AdminAddr     string
-	InternalToken string // INTERNAL_API_TOKEN; empty disables gRPC auth
+	SMTP       *notifier.Config
+	Log        *logging.Config
+	AdminAddr  string
+	NATSURL    string        // NATS_URL
+	MaxDeliver int           // redelivery cap before DLQ
+	AckWait    time.Duration // per-message ack deadline
 }
 
 func (c *Config) validate() error {
-	if c.Port == "" {
-		return fmt.Errorf("port must be set")
+	if c.NATSURL == "" {
+		return fmt.Errorf("NATS_URL must be set")
+	}
+	if c.MaxDeliver < 1 {
+		return fmt.Errorf("NATS_MAX_DELIVER must be >= 1, got %d", c.MaxDeliver)
+	}
+	if c.AckWait <= 0 {
+		return fmt.Errorf("NATS_ACK_WAIT must be > 0, got %s", c.AckWait)
 	}
 	return nil
 }
@@ -54,11 +61,12 @@ func loadCfg() (*Config, error) {
 	}
 
 	cfg := &Config{
-		SMTP:          smtpCfg,
-		Log:           logCfg,
-		Port:          config.GetEnvOrDefault("PORT", "9090"),
-		AdminAddr:     config.GetEnvOrDefault("ADMIN_ADDR", ":9091"),
-		InternalToken: config.GetEnvOrDefault("INTERNAL_API_TOKEN", ""),
+		SMTP:       smtpCfg,
+		Log:        logCfg,
+		AdminAddr:  config.GetEnvOrDefault("ADMIN_ADDR", ":9091"),
+		NATSURL:    config.GetEnvOrDefault("NATS_URL", "nats://localhost:4222"),
+		MaxDeliver: config.GetEnvInt("NATS_MAX_DELIVER", 5),
+		AckWait:    config.GetEnvDuration("NATS_ACK_WAIT", 30*time.Second),
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -93,40 +101,38 @@ func run() error {
 		}
 	}()
 
-	listener, err := net.Listen("tcp", ":"+cfg.Port)
+	nc, js, err := natsbus.Connect(cfg.NATSURL)
 	if err != nil {
-		return fmt.Errorf("listen: %w", err)
+		return fmt.Errorf("connect nats: %w", err)
 	}
-	interceptors := []grpc.UnaryServerInterceptor{
-		grpcmw.RecoveryServerInterceptor(),
-		grpcmw.RequestIDServerInterceptor(),
-		notifier.MetricsInterceptor(),
+	defer func() { _ = nc.Drain() }()
+	if err := natsbus.EnsureStreams(context.Background(), js); err != nil {
+		return fmt.Errorf("ensure streams: %w", err)
 	}
-	if cfg.InternalToken != "" {
-		interceptors = append(interceptors, grpcmw.AuthServerInterceptor(cfg.InternalToken))
-	}
-	server := grpc.NewServer(grpc.ChainUnaryInterceptor(interceptors...))
-	notifierpb.RegisterNotifierServiceServer(server, notifier.NewGRPCServer(mailer))
 
-	go func() {
-		<-ctx.Done()
-		stopped := make(chan struct{})
-		go func() {
-			server.GracefulStop()
-			close(stopped)
-		}()
-		select {
-		case <-stopped:
-		case <-time.After(8 * time.Second):
-			server.Stop() // force-close if a hung in-flight RPC won't drain
-		}
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = adminSrv.Shutdown(shutdownCtx)
-	}()
+	cc, err := notifier.Subscribe(ctx, js, cfg.MaxDeliver, cfg.AckWait, notifier.NewHandler(mailer))
+	if err != nil {
+		return fmt.Errorf("subscribe: %w", err)
+	}
+	defer cc.Stop()
 
-	slog.Info("notifier listening", "grpc", listener.Addr().String(), "admin", cfg.AdminAddr)
-	return server.Serve(listener)
+	slog.Info("notifier consuming", "admin", cfg.AdminAddr)
+	<-ctx.Done()
+
+	// Stop pulling new messages and wait for the in-flight handler to finish
+	// (and ack) so a send isn't cut mid-flight and redelivered on next start.
+	slog.Info("notifier draining", "timeout", drainTimeout)
+	cc.Drain()
+	select {
+	case <-cc.Closed():
+	case <-time.After(drainTimeout):
+		slog.Warn("notifier: drain timed out, exiting with in-flight work")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = adminSrv.Shutdown(shutdownCtx)
+	return nil
 }
 
 func main() {

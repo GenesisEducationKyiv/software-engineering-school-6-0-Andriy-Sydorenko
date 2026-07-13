@@ -1,10 +1,10 @@
 {
   "uid": "red-http",
-  "title": "RED Metrics — App (HTTP) + Notifier (gRPC)",
-  "tags": ["red", "http", "grpc"],
+  "title": "RED Metrics — App (HTTP) + Notifier (NATS)",
+  "tags": ["red", "http", "nats"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 4,
   "refresh": "10s",
   "time": { "from": "now-1h", "to": "now" },
   "templating": { "list": [] },
@@ -75,46 +75,46 @@
     {
       "id": 20,
       "type": "row",
-      "title": "Notifier — gRPC (job=notifier)",
+      "title": "Notifier — NATS consumer (job=notifier)",
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 },
       "panels": []
     },
     {
       "id": 4,
-      "title": "gRPC Request Rate (req/s by method)",
+      "title": "Message Rate (msg/s by subject + outcome)",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 20 },
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (method) (rate(grpc_request_duration_seconds_count[5m]))",
-          "legendFormat": "{{method}}",
+          "expr": "sum by (subject, outcome) (rate(notify_messages_total[5m]))",
+          "legendFormat": "{{subject}} {{outcome}}",
           "refId": "A"
         }
       ]
     },
     {
       "id": 5,
-      "title": "gRPC Error Ratio (code != OK)",
+      "title": "Dead-letter Rate (term/s)",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 20 },
-      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(grpc_request_duration_seconds_count{code!=\"OK\"}[5m])) / clamp_min(sum(rate(grpc_request_duration_seconds_count[5m])), 1e-9)",
-          "legendFormat": "error ratio",
+          "expr": "sum by (subject) (rate(notify_messages_total{outcome=\"term\"}[5m]))",
+          "legendFormat": "{{subject}}",
           "refId": "A"
         }
       ]
     },
     {
       "id": 6,
-      "title": "gRPC Latency p95 / p99 (by method)",
+      "title": "Send Latency p95 / p99",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 9, "w": 24, "x": 0, "y": 29 },
@@ -122,14 +122,14 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum by (method, le) (rate(grpc_request_duration_seconds_bucket[5m])))",
-          "legendFormat": "p95 {{method}}",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(notify_send_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.99, sum by (method, le) (rate(grpc_request_duration_seconds_bucket[5m])))",
-          "legendFormat": "p99 {{method}}",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(notify_send_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99",
           "refId": "B"
         }
       ]

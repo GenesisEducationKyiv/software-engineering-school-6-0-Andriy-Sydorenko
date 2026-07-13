@@ -12,4 +12,6 @@ package codegen
 //go:generate go tool mockgen -source=../app/api/handler.go          -destination=../app/api/mocks/api_mocks.go         -package=mocks
 //go:generate go tool mockgen -source=../app/github/cached_client.go -destination=../app/github/mocks/github_mocks.go   -package=mocks
 //go:generate go tool mockgen -source=../app/scanner/scanner.go      -destination=../app/scanner/mocks/scanner_mocks.go -package=mocks
-//go:generate go tool mockgen -source=../app/service/service.go      -destination=../app/service/mocks/service_mocks.go -package=mocks
+//go:generate go tool mockgen -source=../app/service/service.go        -destination=../app/service/mocks/service_mocks.go         -package=mocks
+//go:generate go tool mockgen -source=../app/service/email_notifier.go -destination=../app/service/mocks/email_notifier_mocks.go -package=mocks
+//go:generate go tool mockgen -source=../notifier/mailer.go            -destination=../notifier/mocks/notifier_mocks.go            -package=mocks

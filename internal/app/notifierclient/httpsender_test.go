@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHTTPSender_SendEmail(t *testing.T) {
@@ -21,7 +22,7 @@ func TestHTTPSender_SendEmail(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		s := NewHTTPSender(srv.URL, "tok")
+		s := NewHTTPSender(srv.URL, "tok", time.Second)
 		if err := s.SendEmail(context.Background(), "u@e.com", "subj", "<p>b</p>"); err != nil {
 			t.Fatalf("SendEmail() error = %v", err)
 		}
@@ -44,7 +45,7 @@ func TestHTTPSender_SendEmail(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		s := NewHTTPSender(srv.URL, "tok")
+		s := NewHTTPSender(srv.URL, "tok", time.Second)
 		err := s.SendEmail(context.Background(), "u@e.com", "subj", "<p>b</p>")
 		if err == nil {
 			t.Fatal("expected error for 400 response, got nil")
@@ -62,7 +63,7 @@ func TestHTTPSender_SendEmail(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		s := NewHTTPSender(srv.URL, "")
+		s := NewHTTPSender(srv.URL, "", time.Second)
 		if err := s.SendEmail(context.Background(), "u@e.com", "subj", "<p>b</p>"); err != nil {
 			t.Fatalf("SendEmail() error = %v", err)
 		}
@@ -79,7 +80,7 @@ func TestHTTPSender_SendEmail(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if err := NewHTTPSender(srv.URL, "").SendEmail(ctx, "u@e.com", "subj", "<p>b</p>"); err == nil {
+		if err := NewHTTPSender(srv.URL, "", time.Second).SendEmail(ctx, "u@e.com", "subj", "<p>b</p>"); err == nil {
 			t.Fatal("expected error for cancelled context")
 		}
 	})

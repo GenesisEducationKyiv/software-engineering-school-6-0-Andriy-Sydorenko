@@ -30,20 +30,17 @@ import (
 const envFile = ".env"
 
 type Config struct {
-	DB                *database.Config
-	Redis             *cache.Config
-	GitHub            *githubclient.Config
-	Scanner           *scanner.Config
-	Log               *logging.Config
-	Port              string
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	APIKey            string
-	NotifierAddr      string // NOTIFIER_GRPC_ADDR, e.g. "notifier:9090"
-	NotifierToken     string // INTERNAL_API_TOKEN; empty disables gRPC auth
-	NotifierTransport string // NOTIFIER_TRANSPORT: "grpc" (default) or "rest"
-	NotifierRESTURL   string // NOTIFIER_REST_URL, e.g. "http://notifier:9091"
-	BaseURL           string // BASE_URL for confirmation/unsubscribe links in emails
+	DB           *database.Config
+	Redis        *cache.Config
+	GitHub       *githubclient.Config
+	Notifier     *notifierclient.Config
+	Scanner      *scanner.Config
+	Log          *logging.Config
+	Port         string
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	APIKey       string
+	BaseURL      string // BASE_URL for confirmation/unsubscribe links in emails
 }
 
 func (c *Config) validate() error {
@@ -52,12 +49,6 @@ func (c *Config) validate() error {
 	}
 	if err := c.Log.Validate(); err != nil {
 		return err
-	}
-	if c.NotifierTransport != "grpc" && c.NotifierTransport != "rest" {
-		return fmt.Errorf("invalid NOTIFIER_TRANSPORT %q (want grpc or rest)", c.NotifierTransport)
-	}
-	if c.NotifierTransport == "rest" && c.NotifierRESTURL == "" {
-		return fmt.Errorf("NOTIFIER_REST_URL is required when NOTIFIER_TRANSPORT=rest")
 	}
 	return nil
 }
@@ -71,27 +62,25 @@ func loadCfg() (*Config, error) {
 	redisCfg := cache.LoadConfig()
 	scannerCfg := scanner.LoadConfig()
 	githubCfg := githubclient.LoadConfig()
+	notifierCfg := notifierclient.LoadConfig()
 	logCfg := logging.LoadConfig()
 
-	if err := config.ValidateAll(dbCfg, redisCfg, scannerCfg, githubCfg, logCfg); err != nil {
+	if err := config.ValidateAll(dbCfg, redisCfg, scannerCfg, githubCfg, notifierCfg, logCfg); err != nil {
 		return nil, err
 	}
 
 	cfg := &Config{
-		DB:                dbCfg,
-		Redis:             redisCfg,
-		Scanner:           scannerCfg,
-		GitHub:            githubCfg,
-		Log:               logCfg,
-		Port:              config.GetEnvOrDefault("PORT", "8080"),
-		ReadTimeout:       config.GetEnvDuration("READ_TIMEOUT", 10*time.Second),
-		WriteTimeout:      config.GetEnvDuration("WRITE_TIMEOUT", 10*time.Second),
-		APIKey:            config.GetEnvOrDefault("API_KEY", ""),
-		NotifierAddr:      config.GetEnvOrDefault("NOTIFIER_GRPC_ADDR", "localhost:9090"),
-		NotifierToken:     config.GetEnvOrDefault("INTERNAL_API_TOKEN", ""),
-		NotifierTransport: config.GetEnvOrDefault("NOTIFIER_TRANSPORT", "grpc"),
-		NotifierRESTURL:   config.GetEnvOrDefault("NOTIFIER_REST_URL", ""),
-		BaseURL:           config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
+		DB:           dbCfg,
+		Redis:        redisCfg,
+		Scanner:      scannerCfg,
+		GitHub:       githubCfg,
+		Notifier:     notifierCfg,
+		Log:          logCfg,
+		Port:         config.GetEnvOrDefault("PORT", "8080"),
+		ReadTimeout:  config.GetEnvDuration("READ_TIMEOUT", 10*time.Second),
+		WriteTimeout: config.GetEnvDuration("WRITE_TIMEOUT", 10*time.Second),
+		APIKey:       config.GetEnvOrDefault("API_KEY", ""),
+		BaseURL:      config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -169,13 +158,11 @@ func main() {
 }
 
 func newEmailSender(cfg *Config) (service.EmailSender, func() error, error) {
-	if cfg.NotifierTransport == "rest" {
-		return notifierclient.NewHTTPSender(
-			cfg.NotifierRESTURL,
-			cfg.NotifierToken,
-		), func() error { return nil }, nil
+	n := cfg.Notifier
+	if n.Transport == "rest" {
+		return notifierclient.NewHTTPSender(n.RESTURL, n.Token, n.RequestTimeout), func() error { return nil }, nil
 	}
-	conn, err := notifierclient.Dial(cfg.NotifierAddr, cfg.NotifierToken)
+	conn, err := notifierclient.Dial(n.Addr, n.Token)
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial notifier: %w", err)
 	}

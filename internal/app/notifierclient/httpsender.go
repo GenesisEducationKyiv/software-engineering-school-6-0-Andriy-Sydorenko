@@ -18,11 +18,11 @@ type HTTPSender struct {
 	client *http.Client
 }
 
-func NewHTTPSender(baseURL, token string) *HTTPSender {
+func NewHTTPSender(baseURL, token string, timeout time.Duration) *HTTPSender {
 	return &HTTPSender{
 		url:    strings.TrimRight(baseURL, "/") + "/v1/send-email",
 		token:  token,
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: &http.Client{Timeout: timeout},
 	}
 }
 

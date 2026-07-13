@@ -95,6 +95,13 @@ linters:
         linters:
           - gosec
         text: G101
+      # mailer.Send rejects CR/LF in recipient/subject before building the MIME,
+      # and net/smtp.SendMail validates the envelope; G707's taint analysis can't
+      # see the guard, so it flags a vector that is already closed.
+      - path: internal/notifier/mailer\.go
+        linters:
+          - gosec
+        text: G707
 
 formatters:
   enable:

@@ -6,6 +6,21 @@
 # Install with `make install-hooks`. Skip with `git commit --no-verify`.
 set -euo pipefail
 
+if command -v buf >/dev/null 2>&1; then
+  if ! buf lint; then
+    echo
+    echo "buf lint failed — fix the .proto contract before committing."
+    exit 1
+  fi
+  if ! buf format -d --exit-code; then
+    echo
+    echo "buf format check failed — run 'buf format -w' to fix .proto formatting, then re-stage."
+    exit 1
+  fi
+else
+  echo "WARNING: buf not installed — proto linting skipped. Install: https://buf.build/docs/installation"
+fi
+
 if ! make verify-mocks; then
   echo
   echo "Run 'make generate-mocks' and re-stage the changes, then commit again."

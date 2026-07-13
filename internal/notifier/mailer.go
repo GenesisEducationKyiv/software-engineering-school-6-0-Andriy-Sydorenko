@@ -31,6 +31,9 @@ func (m *SMTPMailer) Send(ctx context.Context, to, subject, htmlBody string) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if strings.ContainsAny(to, "\r\n") || strings.ContainsAny(subject, "\r\n") {
+		return fmt.Errorf("email header fields must not contain line breaks")
+	}
 	body := buildMIME(m.username, to, subject, htmlBody)
 	addr := fmt.Sprintf("%s:%s", m.host, m.port)
 	auth := smtp.PlainAuth("", m.username, m.password, m.host)

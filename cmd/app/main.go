@@ -30,18 +30,17 @@ import (
 const envFile = ".env"
 
 type Config struct {
-	DB            *database.Config
-	Redis         *cache.Config
-	GitHub        *githubclient.Config
-	Scanner       *scanner.Config
-	Log           *logging.Config
-	Port          string
-	ReadTimeout   time.Duration
-	WriteTimeout  time.Duration
-	APIKey        string
-	NotifierAddr  string // NOTIFIER_GRPC_ADDR, e.g. "notifier:9090"
-	NotifierToken string // INTERNAL_API_TOKEN; empty disables gRPC auth
-	BaseURL       string // BASE_URL for confirmation/unsubscribe links in emails
+	DB           *database.Config
+	Redis        *cache.Config
+	GitHub       *githubclient.Config
+	Notifier     *notifierclient.Config
+	Scanner      *scanner.Config
+	Log          *logging.Config
+	Port         string
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+	APIKey       string
+	BaseURL      string // BASE_URL for confirmation/unsubscribe links in emails
 }
 
 func (c *Config) validate() error {
@@ -63,25 +62,25 @@ func loadCfg() (*Config, error) {
 	redisCfg := cache.LoadConfig()
 	scannerCfg := scanner.LoadConfig()
 	githubCfg := githubclient.LoadConfig()
+	notifierCfg := notifierclient.LoadConfig()
 	logCfg := logging.LoadConfig()
 
-	if err := config.ValidateAll(dbCfg, redisCfg, scannerCfg, githubCfg, logCfg); err != nil {
+	if err := config.ValidateAll(dbCfg, redisCfg, scannerCfg, githubCfg, notifierCfg, logCfg); err != nil {
 		return nil, err
 	}
 
 	cfg := &Config{
-		DB:            dbCfg,
-		Redis:         redisCfg,
-		Scanner:       scannerCfg,
-		GitHub:        githubCfg,
-		Log:           logCfg,
-		Port:          config.GetEnvOrDefault("PORT", "8080"),
-		ReadTimeout:   config.GetEnvDuration("READ_TIMEOUT", 10*time.Second),
-		WriteTimeout:  config.GetEnvDuration("WRITE_TIMEOUT", 10*time.Second),
-		APIKey:        config.GetEnvOrDefault("API_KEY", ""),
-		NotifierAddr:  config.GetEnvOrDefault("NOTIFIER_GRPC_ADDR", "localhost:9090"),
-		NotifierToken: config.GetEnvOrDefault("INTERNAL_API_TOKEN", ""),
-		BaseURL:       config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
+		DB:           dbCfg,
+		Redis:        redisCfg,
+		Scanner:      scannerCfg,
+		GitHub:       githubCfg,
+		Notifier:     notifierCfg,
+		Log:          logCfg,
+		Port:         config.GetEnvOrDefault("PORT", "8080"),
+		ReadTimeout:  config.GetEnvDuration("READ_TIMEOUT", 10*time.Second),
+		WriteTimeout: config.GetEnvDuration("WRITE_TIMEOUT", 10*time.Second),
+		APIKey:       config.GetEnvOrDefault("API_KEY", ""),
+		BaseURL:      config.GetEnvOrDefault("BASE_URL", "http://localhost:8080"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -110,13 +109,13 @@ func run() error {
 	repo := repository.New(db)
 	gh := buildGitHubClient(cfg)
 
-	notifierConn, err := notifierclient.Dial(cfg.NotifierAddr, cfg.NotifierToken)
+	sender, closeSender, err := newEmailSender(cfg)
 	if err != nil {
-		return fmt.Errorf("dial notifier: %w", err)
+		return err
 	}
-	defer func() { _ = notifierConn.Close() }()
+	defer func() { _ = closeSender() }()
 
-	note := service.NewEmailNotifier(cfg.BaseURL, notifierConn)
+	note := service.NewEmailNotifier(cfg.BaseURL, sender)
 	svc := service.New(repo, repo, gh, note, service.RandomToken)
 	scan := scanner.New(repo, gh, note, cfg.Scanner)
 
@@ -156,6 +155,18 @@ func main() {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func newEmailSender(cfg *Config) (service.EmailSender, func() error, error) {
+	n := cfg.Notifier
+	if n.Transport == "rest" {
+		return notifierclient.NewHTTPSender(n.RESTURL, n.Token, n.RequestTimeout), func() error { return nil }, nil
+	}
+	conn, err := notifierclient.Dial(n.Addr, n.Token)
+	if err != nil {
+		return nil, nil, fmt.Errorf("dial notifier: %w", err)
+	}
+	return conn, conn.Close, nil
 }
 
 // githubClient is the GitHub capability surface main wires into both the

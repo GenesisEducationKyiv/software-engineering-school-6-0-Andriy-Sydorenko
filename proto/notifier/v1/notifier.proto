@@ -5,13 +5,17 @@ option go_package = "github.com/Andriy-Sydorenko/repo-release-notifier/internal/
 
 // NotifierService delivers pre-rendered transactional email.
 service NotifierService {
+  // Synchronous: an OK status means the message was accepted for delivery.
+  // Retries and idempotency are the caller's responsibility.
   rpc SendEmail(SendEmailRequest) returns (SendEmailResponse);
 }
 
+// All fields required; empties are rejected with InvalidArgument.
 message SendEmailRequest {
   string recipient_email = 1;
   string subject = 2;
   string html_body = 3;
 }
 
+// Empty: success is conveyed by the OK status.
 message SendEmailResponse {}

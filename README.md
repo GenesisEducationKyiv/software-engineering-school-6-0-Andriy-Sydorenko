@@ -28,6 +28,12 @@ go test ./... -race
 golangci-lint run ./...
 ```
 
+Regenerating the gRPC stubs (`make generate-proto`) or linting the
+proto contract (`make proto-lint`) additionally needs
+[`buf`](https://buf.build/docs/installation) on `PATH`
+(`brew install bufbuild/buf/buf`); the protoc plugins themselves are
+built automatically from versions pinned in `go.mod`.
+
 Only `DATABASE_URL` (or the split `DB_*` vars) and the SMTP
 credentials are strictly required. `REDIS_URL`, `GITHUB_TOKEN` and
 `API_KEY` are optional but anything resembling production should
@@ -251,27 +257,25 @@ for local development; production deployments must set the env var.
 
 ---
 
-## REST vs gRPC
+## REST vs gRPC: internal SendEmail
 
-The task lists gRPC as a bonus. I skipped it on purpose.
+The one place the app↔notifier transport is a real choice is the internal hop where
+the app asks the notifier to send an email. The notifier serves that `SendEmail`
+operation over both gRPC (HTTP/2 + Protobuf, the default) and REST (HTTP/1.1 + JSON),
+selectable via `NOTIFIER_TRANSPORT=grpc|rest`. `bench/harness.go` compares the two
+against a no-op mailer — transport and encoding cost only, no SMTP. Reproduce with
+`make bench` (latency) and `make bench-throughput` (concurrency).
 
-The two services we talk to are GitHub (REST + GraphQL only — no
-gRPC endpoint to consume) and SMTP (obviously not gRPC). The two
-services that talk to us are browsers and email clients. Browsers
-can't speak gRPC natively — they need gRPC-Web and a proxy in
-front. Email clients open HTTP links, period. There is no
-internal service mesh here, no streaming, no bidirectional flow,
-no sub-millisecond latency target.
+What the benchmark shows: for a single small payload REST is competitive, even
+slightly ahead — HTTP/1.1 + JSON carries less per-call machinery than gRPC's framing,
+flow control, and interceptors. gRPC pulls ahead as the body grows (Protobuf is
+compact binary; JSON allocates and escapes a larger textual payload) and under
+concurrency (one multiplexed HTTP/2 connection versus a connection per in-flight
+HTTP/1.1 request, which degrades as load climbs).
 
-Adding gRPC would mean duplicating every handler against a
-protobuf service, running codegen, and then still needing the
-REST surface anyway because the web page and the email links
-can't go away. That's pure surface area for zero consumer
-benefit, so the endpoints stay REST-only.
-
-If this project ever grew a second Go service that wanted to
-subscribe/unsubscribe users programmatically in bulk, gRPC would
-start making sense. It doesn't today.
+gRPC is the right default for this hop — an internal, service-to-service call carrying
+HTML bodies under fan-out concurrency. REST stays a first-class, selectable transport
+because it's curl-able and trivially debuggable. Neither was deleted; the flag picks one.
 
 ---
 
@@ -396,7 +400,7 @@ structured slog JSON: `level`, `msg`, `container.name`, plus attrs like `route`,
 
 ## What's intentionally not here
 
-Bonus items from the spec I didn't implement:
+Deliberately out of scope:
 
 - **Deployment.** No hosting wired up. `docker-compose.yml` gets
   you the full stack locally.

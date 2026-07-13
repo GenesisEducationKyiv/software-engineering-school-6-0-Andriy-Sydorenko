@@ -120,18 +120,11 @@ func run() error {
 	repo := repository.New(db)
 	gh := buildGitHubClient(cfg)
 
-	var sender service.EmailSender
-	switch cfg.NotifierTransport {
-	case "rest":
-		sender = notifierclient.NewHTTPSender(cfg.NotifierRESTURL, cfg.NotifierToken)
-	default: // grpc; NOTIFIER_TRANSPORT is validated in Config.validate
-		notifierConn, err := notifierclient.Dial(cfg.NotifierAddr, cfg.NotifierToken)
-		if err != nil {
-			return fmt.Errorf("dial notifier: %w", err)
-		}
-		defer func() { _ = notifierConn.Close() }()
-		sender = notifierConn
+	sender, closeSender, err := newEmailSender(cfg)
+	if err != nil {
+		return err
 	}
+	defer func() { _ = closeSender() }()
 
 	note := service.NewEmailNotifier(cfg.BaseURL, sender)
 	svc := service.New(repo, repo, gh, note, service.RandomToken)
@@ -173,6 +166,20 @@ func main() {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func newEmailSender(cfg *Config) (service.EmailSender, func() error, error) {
+	if cfg.NotifierTransport == "rest" {
+		return notifierclient.NewHTTPSender(
+			cfg.NotifierRESTURL,
+			cfg.NotifierToken,
+		), func() error { return nil }, nil
+	}
+	conn, err := notifierclient.Dial(cfg.NotifierAddr, cfg.NotifierToken)
+	if err != nil {
+		return nil, nil, fmt.Errorf("dial notifier: %w", err)
+	}
+	return conn, conn.Close, nil
 }
 
 // githubClient is the GitHub capability surface main wires into both the

@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/domain"
 )
 
 // newTestClient: real Client routed at httptest app via a host-rewriting transport.

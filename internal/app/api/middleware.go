@@ -7,8 +7,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/logging"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/domain"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/observability/logging"
 )
 
 const requestIDHeader = "X-Request-ID"

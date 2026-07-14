@@ -7,8 +7,8 @@ import (
 
 	"go.uber.org/mock/gomock"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service/mocks"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notify"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/service/mocks"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/notify"
 )
 
 func TestSendConfirmationPublishesRenderedCommand(t *testing.T) {

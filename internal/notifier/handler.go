@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notify"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/notify"
 )
 
 // NewHandler returns a Handler that sends each EmailCommand via the mailer.

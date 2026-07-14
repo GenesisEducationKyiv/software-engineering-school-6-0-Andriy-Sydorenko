@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/domain"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/repository"
 )
 
 // TestWatchedRepoUpsert exercises the real GORM upsert (OnConflict on the

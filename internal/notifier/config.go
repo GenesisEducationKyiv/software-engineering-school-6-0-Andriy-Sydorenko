@@ -3,7 +3,7 @@ package notifier
 import (
 	"fmt"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/config"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/config"
 )
 
 type Config struct {

@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/domain"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/scanner/mocks"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/domain"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/scanner/mocks"
 )
 
 type fixture struct {

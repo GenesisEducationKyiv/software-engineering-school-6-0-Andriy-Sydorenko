@@ -23,7 +23,7 @@ repos:
       - id: go-fmt
         exclude: '(^|/)mocks/'
       - id: go-imports
-        args: ['-local', 'github.com/Andriy-Sydorenko/repo-release-notifier']
+        args: ['-local', 'github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko']
         exclude: '(^|/)mocks/'
       - id: go-unit-tests
 

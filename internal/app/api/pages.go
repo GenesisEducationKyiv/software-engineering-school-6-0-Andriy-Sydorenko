@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/templates"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/templates"
 )
 
 func subscribePage(c *gin.Context) {

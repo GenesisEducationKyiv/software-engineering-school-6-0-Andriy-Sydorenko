@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notify"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/notify"
 )
 
 type Publisher interface {

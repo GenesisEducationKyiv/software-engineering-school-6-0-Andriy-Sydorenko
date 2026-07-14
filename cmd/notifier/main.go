@@ -15,11 +15,11 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/config"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/logging"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/config"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/natsbus"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/observability/logging"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/notifier"
 )
 
 const (

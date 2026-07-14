@@ -5,7 +5,7 @@ package e2e
 import (
 	"regexp"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/tests/e2e/harness"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/tests/e2e/harness"
 )
 
 // TestSubscribe_RateLimited drives the form against a repo whose owner the

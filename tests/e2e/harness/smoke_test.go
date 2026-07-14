@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/tests/e2e/harness"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/tests/e2e/harness"
 )
 
 type SmokeSuite struct {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/tests/e2e/harness"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/tests/e2e/harness"
 )
 
 // AuthSuite has its own harness configured with a non-empty API key so the

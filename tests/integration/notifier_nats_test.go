@@ -14,10 +14,10 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/natspublisher"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notify"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/natspublisher"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/notifier"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/natsbus"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/notify"
 )
 
 // recordingMailer is a notifier.Mailer that records recipients (or fails on demand).

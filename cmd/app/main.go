@@ -14,19 +14,19 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/api"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/cache"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/natspublisher"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/repository"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/scanner"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/service"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/config"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/natsbus"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notify"
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/observability/logging"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/api"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/cache"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/natspublisher"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/repository"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/scanner"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/service"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/config"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/natsbus"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/notify"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/observability/logging"
 
-	database "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/db"
-	githubclient "github.com/Andriy-Sydorenko/repo-release-notifier/internal/app/github"
+	database "github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/db"
+	githubclient "github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/app/github"
 )
 
 const envFile = ".env"

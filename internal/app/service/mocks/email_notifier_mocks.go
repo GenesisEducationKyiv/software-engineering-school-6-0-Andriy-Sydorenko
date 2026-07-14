@@ -13,7 +13,7 @@ import (
 	context "context"
 	reflect "reflect"
 
-	notify "github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/notify"
+	notify "github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/notify"
 	gomock "go.uber.org/mock/gomock"
 )
 

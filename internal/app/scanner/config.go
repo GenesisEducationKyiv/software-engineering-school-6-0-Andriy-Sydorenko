@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Andriy-Sydorenko/repo-release-notifier/internal/shared/config"
+	"github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/shared/config"
 )
 
 // Config bundles scanner knobs. The per-GitHub-call deadline lives on

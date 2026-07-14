@@ -78,7 +78,7 @@ linters:
             - "**/internal/app/**"
             - "**/cmd/app/**"
           deny:
-            - pkg: github.com/Andriy-Sydorenko/repo-release-notifier/internal/notifier
+            - pkg: github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko/internal/notifier
               desc: "app and notifier communicate via NATS (internal/shared/notify + natsbus); the app must not import the notifier service-core"
 
   exclusions:
@@ -103,7 +103,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/Andriy-Sydorenko/repo-release-notifier
+        - github.com/GenesisEducationKyiv/software-engineering-school-6-0-Andriy-Sydorenko
 
 output:
   sort-order:

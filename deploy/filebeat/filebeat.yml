@@ -1,0 +1,41 @@
+filebeat.inputs:
+  - type: container
+    paths:
+      - /var/lib/docker/containers/*/*.log
+
+processors:
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+  # Keep the app and notifier containers; the Compose service label survives rebuilds.
+  - drop_event:
+      when:
+        not:
+          or:
+            - equals:
+                container.labels.com_docker_compose_service: "app"
+            - equals:
+                container.labels.com_docker_compose_service: "notifier"
+  - decode_json_fields:
+      fields: ["message"]
+      target: ""
+      overwrite_keys: true
+      add_error_key: true
+  - timestamp:
+      field: "time"
+      layouts:
+        - "2006-01-02T15:04:05Z07:00"
+        - "2006-01-02T15:04:05.999999999Z07:00"
+      ignore_missing: true
+  - drop_fields:
+      fields: ["time"]
+      ignore_missing: true
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  index: "repo-release-notifier-%{+yyyy.MM.dd}"
+
+# Plain date-based index (not a data stream): disable managed template/ILM.
+setup.ilm.enabled: false
+setup.template.enabled: false
+
+logging.level: info

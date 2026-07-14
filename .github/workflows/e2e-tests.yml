@@ -1,0 +1,38 @@
+name: E2E tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: playwright-go + testcontainers
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Run e2e tests
+        run: go test -tags=e2e -count=1 -timeout=10m ./tests/e2e/...
+
+      - name: Upload e2e failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-artifacts
+          path: tests/e2e/_artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
